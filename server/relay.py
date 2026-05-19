@@ -6,7 +6,7 @@ import websockets
 
 HAOS_URL = "ws://haos.lan.maplenetwork.ca:8927/sendspin"
 BIND_IP = "0.0.0.0"
-BIND_PORT = 8095
+BIND_PORT = 26022
 
 connected_clients = set()
 server_offset = 0  # Relay clock minus HAOS clock in microseconds
@@ -151,4 +151,5 @@ async def main():
     await asyncio.gather(server.wait_closed(), upstream)
 
 if __name__ == "__main__":
+    print("Started")
     asyncio.run(main())

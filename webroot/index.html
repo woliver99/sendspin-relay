@@ -128,13 +128,13 @@
 
   <div class="card">
     <h1>Public Audio Sync</h1>
-    <p>It might take up to 20 seconds for it to sync properly.</p>
+    <p>It might take up to 30 seconds for it to sync properly.</p>
     <button id="connectBtn">Connect</button>
     <div id="statusText" class="status disconnected">Disconnected</div>
   </div>
 
   <script type="module">
-    import { SendspinPlayer } from "./assets/sendspin.js";
+    import { SendspinPlayer } from "./sendspin.js";
 
     const connectBtn = document.getElementById("connectBtn");
     const statusText = document.getElementById("statusText");
@@ -186,7 +186,7 @@
         player = new SendspinPlayer({
           playerId: guestId,
           clientName: `Guest Speaker (${guestId})`,
-          baseUrl: "http://" + window.location.hostname + ":8095",
+          baseUrl: "https://sendspin.maplenetwork.ca/ws",
           correctionMode: "sync",
           reconnect: {
             baseDelayMs: 1000,
