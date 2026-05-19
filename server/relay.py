@@ -28,7 +28,7 @@ async def upstream_client():
                     "type": "client/hello",
                     "payload": {
                         "client_id": "relay-server-master",
-                        "name": "Party Relay Server",
+                        "name": "Public Relay",
                         "version": 1,
                         "supported_roles": ["player@v1", "metadata@v1"],
                         "player@v1_support": {
