@@ -40,7 +40,7 @@ async def upstream_client():
                             "supported_formats": [
                                 {"codec": "opus", "channels": 2, "sample_rate": 48000, "bit_depth": 16}
                             ],
-                            "buffer_capacity": 5000000,
+                            "buffer_capacity": 2500000,
                             "supported_commands": []
                         }
                     }

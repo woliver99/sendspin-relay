@@ -70,6 +70,7 @@ let player = null;
 let isNetworkConnected = false;
 let keepAliveContext = null;
 let isPlayerReconnecting = false;
+const syncDriftWindow = [];
 
 async function startApplication() {
     // Disconnect any lingering socket
@@ -136,6 +137,7 @@ async function startApplication() {
             clientName: `Guest Speaker (${guestId})`,
             baseUrl: "https://sendspin.maplenetwork.ca/ws",
             correctionMode: "sync",
+            correctionThresholds: { sync: { resyncAboveMs: 50 } },
             outputMode: "direct", // Bypass iOS HTMLAudio tag blocking
             reconnect: {
                 baseDelayMs: 1000,
@@ -170,6 +172,23 @@ async function startApplication() {
             const syncMs = typeof syncInfo.syncErrorMs === "number" && Number.isFinite(syncInfo.syncErrorMs)
                 ? syncInfo.syncErrorMs
                 : null;
+
+            // Rolling sync drift monitor: if 5+ of the last 20 readings exceed ±100ms, force restart
+            if (syncMs !== null) {
+                syncDriftWindow.push(Math.abs(syncMs));
+                if (syncDriftWindow.length > 20) syncDriftWindow.shift();
+
+                if (syncDriftWindow.length === 20) {
+                    const badCount = syncDriftWindow.filter(v => v > 100).length;
+                    if (badCount >= 5) {
+                        console.warn(`[SYNC-WATCHDOG] ${badCount}/20 readings exceeded 100ms. Forcing hard restart...`);
+                        syncDriftWindow.length = 0;
+                        stopApplication();
+                        setTimeout(() => startApplication(), 1000);
+                        return;
+                    }
+                }
+            }
 
             // Debugging staleness readout
             const secondsSincePacket = ((Date.now() - lastPacketTime) / 1000).toFixed(1);
