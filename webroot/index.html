@@ -5,124 +5,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Public Audio Sync</title>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background-color: #121212;
-      color: #ffffff;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      margin: 0;
-      padding: 20px;
-      box-sizing: border-box;
-    }
+  <link rel="stylesheet" href="styles.css">
 
-    .card {
-      background-color: #1e1e1e;
-      padding: 30px;
-      border-radius: 16px;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-      text-align: center;
-      max-width: 400px;
-      width: 100%;
-    }
+  <!-- iOS debugger -->
+  <!--
+  <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
+  <script>eruda.init();</script>
+  -->
 
-    h1 {
-      margin-top: 0;
-      margin-bottom: 10px;
-      font-size: 24px;
-      color: #ff5722;
-    }
-
-    p {
-      color: #aaaaaa;
-      font-size: 14px;
-      margin-bottom: 25px;
-      line-height: 1.4;
-    }
-
-    button {
-      width: 100%;
-      padding: 15px;
-      background: #ff5722;
-      border: none;
-      color: white;
-      font-weight: bold;
-      border-radius: 8px;
-      font-size: 16px;
-      cursor: pointer;
-      transition: background 0.2s, transform 0.1s;
-    }
-
-    button:hover {
-      background: #f4511e;
-    }
-
-    button:active {
-      transform: scale(0.98);
-    }
-
-    button:disabled {
-      background: #555;
-      cursor: not-allowed;
-      transform: none;
-    }
-
-    .unmute-btn {
-      background: #4caf50 !important;
-      font-size: 18px !important;
-      animation: pulse 1.5s infinite;
-    }
-
-    @keyframes pulse {
-      0% {
-        transform: scale(1);
-      }
-
-      50% {
-        transform: scale(1.05);
-      }
-
-      100% {
-        transform: scale(1);
-      }
-    }
-
-    .status {
-      margin-top: 20px;
-      font-weight: 500;
-      font-size: 14px;
-    }
-
-    .connected {
-      color: #4caf50;
-    }
-
-    .disconnected {
-      color: #f44336;
-    }
-
-    .connecting {
-      color: #ffeb3b;
-    }
-  </style>
-  <script>
-    window.sendspinAudioElements = [];
-    const originalCreateElement = document.createElement;
-    document.createElement = function (tagName) {
-      const el = originalCreateElement.call(document, tagName);
-      if (tagName.toLowerCase() === "audio") {
-        window.sendspinAudioElements.push(el);
-      }
-      return el;
-    };
-  </script>
 </head>
 
 <body>
+  <!-- Dummy node to unlock AudioContext -->
   <audio id="iosUnlocker" src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"
     preload="auto"></audio>
 
@@ -133,126 +27,7 @@
     <div id="statusText" class="status disconnected">Disconnected</div>
   </div>
 
-  <script type="module">
-    import { SendspinPlayer } from "./sendspin.js";
-
-    const connectBtn = document.getElementById("connectBtn");
-    const statusText = document.getElementById("statusText");
-    const iosUnlocker = document.getElementById("iosUnlocker");
-
-    const isIOS =
-      /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-
-    let player = null;
-    let isNetworkConnected = false;
-
-    connectBtn.addEventListener("click", async () => {
-      if (player) {
-        try { player.disconnect(); } catch (e) { }
-      }
-
-      if (
-        isIOS &&
-        isNetworkConnected &&
-        connectBtn.classList.contains("unmute-btn")
-      ) {
-        window.sendspinAudioElements.forEach((audio) => {
-          audio.muted = false;
-          audio.play().catch((e) => console.error("Force play failed", e));
-        });
-        if (player) {
-          player.setMuted(false);
-          player.setVolume(100);
-        }
-        connectBtn.classList.remove("unmute-btn");
-        connectBtn.textContent = "Speaker Live";
-        connectBtn.style.background = "#333";
-        connectBtn.disabled = true;
-        statusText.textContent = "Connected!";
-        statusText.className = "status connected";
-        return;
-      }
-
-      iosUnlocker.play().catch((e) => console.log("Unlocker bypassed: ", e));
-
-      connectBtn.disabled = true;
-      statusText.textContent = "Connecting...";
-      statusText.className = "status connecting";
-
-      try {
-        const guestId = "guest-" + Math.random().toString(36).substring(2, 7);
-
-        player = new SendspinPlayer({
-          playerId: guestId,
-          clientName: `Guest Speaker (${guestId})`,
-          baseUrl: "https://sendspin.maplenetwork.ca/ws",
-          correctionMode: "sync",
-          reconnect: {
-            baseDelayMs: 1000,
-            maxDelayMs: 15000,
-            maxAttempts: Infinity,
-          },
-          onStateChange: (state) => {
-            if (!isNetworkConnected) return;
-
-            if (state.groupState && state.groupState.group_id) {
-              console.log("[Sendspin] Current Group ID:", state.groupState.group_id, "Name:", state.groupState.group_name);
-            } else if (state.playerState === 'synchronized') {
-              console.log(`[Sendspin] Synchronized but not in a group.`);
-            }
-          }
-        });
-
-        await player.connect();
-
-        if (isIOS) {
-          player.setVolume(0);
-          player.setMuted(true);
-        } else {
-          player.setVolume(1);
-          player.setMuted(false);
-        }
-
-        // Sendspin 'switch' cycles through *currently active* groups,
-        // it does not accept arguments. We call it once to jump into the currently
-        // playing master group if one exists.
-        await player.sendCommand("switch");
-
-        isNetworkConnected = true;
-
-        if (isIOS) {
-          connectBtn.disabled = false;
-          connectBtn.textContent = "TAP TO UNMUTE";
-          connectBtn.classList.add("unmute-btn");
-          statusText.textContent = "Tap above to hear audio.";
-          statusText.className = "status connected";
-        } else {
-          statusText.className = "status connected";
-          let countdown = 10;
-          statusText.textContent = `Synchronizing (${countdown}s)...`;
-
-          const syncInterval = setInterval(() => {
-            countdown--;
-            if (countdown > 0) {
-              statusText.textContent = `Synchronizing (${countdown}s)...`;
-            } else {
-              clearInterval(syncInterval);
-              player.setVolume(100);
-              statusText.textContent = "Connected";
-              connectBtn.textContent = "Speaker Live";
-            }
-          }, 1000);
-        }
-      } catch (error) {
-        console.error("Sendspin instantiation error:", error);
-        statusText.textContent = "Connection Failed. Check network connection.";
-        statusText.className = "status disconnected";
-        connectBtn.disabled = false;
-        connectBtn.textContent = "Connect";
-      }
-    });
-  </script>
+  <script type="module" src="app.js"></script>
 </body>
 
 </html>
