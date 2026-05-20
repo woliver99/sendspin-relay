@@ -17,6 +17,28 @@ window.WebSocket = class extends OriginalWebSocket {
     }
 };
 
+// Lock the mediaSession handlers BEFORE sendspin-js can override them.
+// We monkey-patch setActionHandler so the SDK can never steal pause/stop/play.
+if ('mediaSession' in navigator) {
+    const lockedActions = {};
+    const originalSetActionHandler = navigator.mediaSession.setActionHandler.bind(navigator.mediaSession);
+
+    // Register our handlers first
+    lockedActions['pause'] = () => { if (typeof stopApplication === 'function') stopApplication(); };
+    lockedActions['stop'] = () => { if (typeof stopApplication === 'function') stopApplication(); };
+    lockedActions['play'] = () => { if (typeof startApplication === 'function' && !isAppStarted) startApplication(); };
+
+    originalSetActionHandler('pause', lockedActions['pause']);
+    originalSetActionHandler('stop', lockedActions['stop']);
+    originalSetActionHandler('play', lockedActions['play']);
+
+    // Block sendspin-js from overwriting our handlers
+    navigator.mediaSession.setActionHandler = (action, handler) => {
+        if (action in lockedActions) return; // silently swallow
+        originalSetActionHandler(action, handler);
+    };
+}
+
 import { createSyncGraph, applySyncToneClass, formatSyncValue, getSyncTone } from "./sync-graph.js";
 const connectBtn = document.getElementById("connectBtn");
 const statusText = document.getElementById("statusText");
@@ -91,12 +113,19 @@ async function startApplication() {
             const wakeLockAudio = document.createElement("audio");
             wakeLockAudio.srcObject = dest.stream;
             wakeLockAudio.loop = true;
-            wakeLockAudio.play().catch(e => console.log("Wake-lock promise rejected:", e));
+            wakeLockAudio.play().catch(e => console.log("iOS Wake-lock promise rejected:", e));
+
 
             if (keepAliveContext.state === 'suspended') {
                 keepAliveContext.resume();
             }
             console.log("Background HTMLAudio MediaStream Wake-Lock spun up successfully!");
+        }
+
+        // The magical Android MediaSession hardware lock
+        const androidAudio = document.getElementById("androidWakeLockAudio");
+        if (androidAudio) {
+            androidAudio.play().catch(e => console.log("Android Wake-lock promise rejected:", e));
         }
 
         const guestId = "guest-" + Math.random().toString(36).substring(2, 7);
@@ -194,7 +223,12 @@ async function startApplication() {
         // Direct automated success
         statusText.textContent = "Syncing";
         statusText.className = "status connected";
-        connectBtn.textContent = "Speaker Live";
+
+        // Transform the Connect button into a Stop button
+        connectBtn.disabled = false;
+        connectBtn.textContent = "Stop";
+        isAppStarted = true;
+
         console.log("Ready and listening on Sendspin Engine.");
 
         // Unleash the Sync Engine Canvas animations!
@@ -210,4 +244,48 @@ async function startApplication() {
     }
 }
 
-connectBtn.addEventListener("click", startApplication);
+let isAppStarted = false;
+
+function stopApplication() {
+    if (!player) return;
+
+    try { player.disconnect(); } catch (e) { }
+
+    for (const ws of activeSockets) {
+        try { ws.close(); } catch (e) { }
+    }
+    activeSockets.clear();
+
+    if (syncUpdateInterval) {
+        window.clearInterval(syncUpdateInterval);
+        syncUpdateInterval = null;
+    }
+    syncGraph.stop();
+    syncGraph.reset();
+    syncPanel.setAttribute("aria-hidden", "true");
+    resetSyncDisplay();
+
+    // Pause the Android wake-lock audio so the lockscreen clears
+    const androidAudio = document.getElementById("androidWakeLockAudio");
+    if (androidAudio) androidAudio.pause();
+
+    player = null;
+    isNetworkConnected = false;
+    isPlayerReconnecting = false;
+    isAppStarted = false;
+
+    connectBtn.disabled = false;
+    connectBtn.textContent = "Connect";
+    statusText.textContent = "Disconnected";
+    statusText.className = "status disconnected";
+
+    console.log("Application stopped.");
+}
+
+connectBtn.addEventListener("click", () => {
+    if (!isAppStarted) {
+        startApplication();
+    } else {
+        stopApplication();
+    }
+});
