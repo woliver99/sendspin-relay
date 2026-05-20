@@ -1,9 +1,32 @@
 import { SendspinPlayer } from "./sendspin.js";
 
+import { createSyncGraph, applySyncToneClass, formatSyncValue, getSyncTone } from "./sync-graph.js";
 const connectBtn = document.getElementById("connectBtn");
 const statusText = document.getElementById("statusText");
 const iosUnlocker = document.getElementById("iosUnlocker");
 
+// Sync Visualization DOM mappings
+const syncPanel = document.getElementById("sendspin-demo-sync-panel");
+const syncStatus = document.getElementById("sendspin-demo-sync-status");
+const syncGraphShell = document.getElementById("sendspin-demo-sync-graph-shell");
+const syncCanvas = document.getElementById("sendspin-demo-sync-graph");
+
+const syncGraph = createSyncGraph({
+    canvas: syncCanvas,
+    shell: syncGraphShell,
+});
+
+function renderSyncDisplay({ label, tone = "sync-idle", syncMs = null }) {
+    syncStatus.textContent = label;
+    applySyncToneClass(syncStatus, tone);
+    syncGraph.updateSample({ syncMs, tone });
+}
+
+function resetSyncDisplay() {
+    renderSyncDisplay({ label: "--.- ms", tone: "sync-idle", syncMs: null });
+}
+
+let syncUpdateInterval = null;
 let player = null;
 let isNetworkConnected = false;
 let keepAliveContext = null;
@@ -13,6 +36,12 @@ connectBtn.addEventListener("click", async () => {
     if (player) {
         try { player.disconnect(); } catch (e) { }
     }
+
+    // Stop sync visualizer animations
+    if (syncUpdateInterval) window.clearInterval(syncUpdateInterval);
+    syncGraph.stop();
+    syncGraph.reset();
+    syncPanel.setAttribute("aria-hidden", "true");
 
     // Disable button and UI instantly
     connectBtn.disabled = true;
@@ -56,7 +85,7 @@ connectBtn.addEventListener("click", async () => {
         player = new SendspinPlayer({
             playerId: guestId,
             clientName: `Guest Speaker (${guestId})`,
-            baseUrl: "https://" + window.location.hostname + "/ws",
+            baseUrl: "https://sendspin.maplenetwork.ca/ws",
             correctionMode: "sync",
             outputMode: "direct", // Bypass iOS HTMLAudio tag blocking
             reconnect: {
@@ -75,6 +104,27 @@ connectBtn.addEventListener("click", async () => {
             }
         });
 
+        // Set up the visualization updater
+        syncUpdateInterval = window.setInterval(() => {
+            if (!player || !player.isConnected) return;
+
+            const syncInfo = player.syncInfo ?? {};
+            const syncMs = typeof syncInfo.syncErrorMs === "number" && Number.isFinite(syncInfo.syncErrorMs)
+                ? syncInfo.syncErrorMs
+                : null;
+
+            if (!player.isPlaying || syncMs === null) {
+                resetSyncDisplay();
+                return;
+            }
+
+            renderSyncDisplay({
+                label: formatSyncValue(syncMs),
+                tone: getSyncTone(syncMs),
+                syncMs,
+            });
+        }, 250);
+
         console.log("Waiting for network backend (await connect)...");
 
         // Network Call yields event loop (AudioContext is permanently granted by now)
@@ -90,6 +140,10 @@ connectBtn.addEventListener("click", async () => {
         statusText.className = "status connected";
         connectBtn.textContent = "Speaker Live";
         console.log("Ready and listening on Sendspin Engine.");
+
+        // Unleash the Sync Engine Canvas animations!
+        syncPanel.setAttribute("aria-hidden", "false");
+        syncGraph.start();
 
     } catch (error) {
         console.log("Error: " + error);

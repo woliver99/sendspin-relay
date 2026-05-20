@@ -64,7 +64,18 @@
     <p>It might take up to 60 seconds for it to start playing music</p>
     <button id="connectBtn">Connect</button>
     <div id="statusText" class="status disconnected">Disconnected</div>
-    <div class="version">v1.1.0</div>
+
+    <div id="sendspin-demo-sync-panel" class="demo-card__sync" aria-hidden="true">
+      <div class="demo-card__sync-head">
+        <span class="demo-card__sync-title">Synchronization</span>
+        <span id="sendspin-demo-sync-status" class="demo-card__sync-readout sync-idle">--.- ms</span>
+      </div>
+      <div id="sendspin-demo-sync-graph-shell" class="demo-card__sync-graph-shell sync-idle">
+        <canvas id="sendspin-demo-sync-graph" class="demo-card__sync-graph" aria-label="Synchronization graph"></canvas>
+      </div>
+    </div>
+
+    <div class="version">v1.2.0</div>
   </div>
 
   <div class="qr-container">
