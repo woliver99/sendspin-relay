@@ -1,5 +1,22 @@
 import { SendspinPlayer } from "./sendspin.js";
 
+// Global WebSocket interceptor for stalling diagnostics
+let lastPacketTime = Date.now();
+const activeSockets = new Set();
+const OriginalWebSocket = window.WebSocket;
+window.WebSocket = class extends OriginalWebSocket {
+    constructor(...args) {
+        super(...args);
+        activeSockets.add(this);
+        this.addEventListener('message', () => {
+            lastPacketTime = Date.now();
+        });
+        this.addEventListener('close', () => {
+            activeSockets.delete(this);
+        });
+    }
+};
+
 import { createSyncGraph, applySyncToneClass, formatSyncValue, getSyncTone } from "./sync-graph.js";
 const connectBtn = document.getElementById("connectBtn");
 const statusText = document.getElementById("statusText");
@@ -30,8 +47,9 @@ let syncUpdateInterval = null;
 let player = null;
 let isNetworkConnected = false;
 let keepAliveContext = null;
+let isPlayerReconnecting = false;
 
-connectBtn.addEventListener("click", async () => {
+async function startApplication() {
     // Disconnect any lingering socket
     if (player) {
         try { player.disconnect(); } catch (e) { }
@@ -42,6 +60,8 @@ connectBtn.addEventListener("click", async () => {
     syncGraph.stop();
     syncGraph.reset();
     syncPanel.setAttribute("aria-hidden", "true");
+
+    lastPacketTime = Date.now();
 
     // Disable button and UI instantly
     connectBtn.disabled = true;
@@ -92,6 +112,15 @@ connectBtn.addEventListener("click", async () => {
                 baseDelayMs: 1000,
                 maxDelayMs: 15000,
                 maxAttempts: Infinity,
+                onReconnecting: (attempt) => {
+                    isPlayerReconnecting = true;
+                    statusText.className = "status connecting";
+                },
+                onReconnected: () => {
+                    isPlayerReconnecting = false;
+                    statusText.className = "status connected";
+                    lastPacketTime = Date.now();
+                }
             },
             onStateChange: (state) => {
                 if (!isNetworkConnected) return;
@@ -113,16 +142,43 @@ connectBtn.addEventListener("click", async () => {
                 ? syncInfo.syncErrorMs
                 : null;
 
+            // Debugging staleness readout
+            const secondsSincePacket = ((Date.now() - lastPacketTime) / 1000).toFixed(1);
             if (!player.isPlaying || syncMs === null) {
                 resetSyncDisplay();
-                return;
+                if (isPlayerReconnecting) {
+                    statusText.textContent = `Reconnecting... (${secondsSincePacket}s dead)`;
+                    statusText.className = "status connecting";
+                } else {
+                    statusText.textContent = player.isConnected ? `Connected (Idle: ${secondsSincePacket}s)` : "Disconnected";
+                }
+            } else {
+                isPlayerReconnecting = false;
+                statusText.textContent = `Syncing (Last message: ${secondsSincePacket}s ago)`;
+                renderSyncDisplay({
+                    label: formatSyncValue(syncMs),
+                    tone: getSyncTone(syncMs),
+                    syncMs,
+                });
             }
 
-            renderSyncDisplay({
-                label: formatSyncValue(syncMs),
-                tone: getSyncTone(syncMs),
-                syncMs,
-            });
+            // Forceful reconnection on dead OS-level socket suspend (iOS/Desktop sleep)
+            if (player.isConnected && (Date.now() - lastPacketTime) > 30000) {
+                console.warn(`[WATCHDOG] Connection stalled for >30s. Triggering synthetic protocol teardown...`);
+
+                for (const ws of activeSockets) {
+                    try {
+                        ws.close();
+                        // iOS Safari WebKit BUG: If a socket is physically dead, ws.close() blocks 
+                        // infinitely and NEVER dispatches the onclose event to JS.
+                        // We must synthetically fire it so SendspinPlayer starts its backoff protocol.
+                        if (typeof ws.onclose === "function") {
+                            ws.onclose(new Event("close"));
+                        }
+                    } catch (e) { console.error(e); }
+                }
+                activeSockets.clear();
+            }
         }, 250);
 
         console.log("Waiting for network backend (await connect)...");
@@ -147,9 +203,11 @@ connectBtn.addEventListener("click", async () => {
 
     } catch (error) {
         console.log("Error: " + error);
-        statusText.textContent = "Connection Failed. Check network connection.";
-        statusText.className = "status disconnected";
-        connectBtn.disabled = false;
-        connectBtn.textContent = "Connect";
+
+        // We do not re-enable the connectBtn or alter SendspinPlayer's state because 
+        // the native SDK background reconnect-cycler continues spinning even when 
+        // the initial connect promise rejects. This honors the persistent 1-click requirement.
     }
-});
+}
+
+connectBtn.addEventListener("click", startApplication);
