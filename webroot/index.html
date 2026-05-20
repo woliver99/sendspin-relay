@@ -8,23 +8,65 @@
   <link rel="stylesheet" href="styles.css">
 
   <!-- iOS debugger -->
-  <!--
+
+  <script>
+    window._rawLogs = [];
+    ['log', 'warn', 'error', 'info'].forEach(method => {
+      const original = console[method];
+      console[method] = function (...args) {
+        // Convert objects to text so they don't just say [object Object]
+        const parsed = args.map(a => {
+          try { return typeof a === 'object' ? JSON.stringify(a) : String(a); }
+          catch (e) { return String(a); } // Fallback for complex circular objects
+        });
+        window._rawLogs.push(`[${method.toUpperCase()}] ${parsed.join(' ')}`);
+
+        // Pass the log to the original console (so Eruda still sees it)
+        original.apply(console, args);
+      };
+    });
+  </script>
+
+  <!-- 2. Your original Eruda scripts -->
   <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
   <script>eruda.init();</script>
-  -->
+
+  <!-- 3. A floating button added to your webpage to copy everything -->
+  <button
+    style="position: fixed; top: 15px; left: 15px; z-index: 999999; padding: 12px 18px; background: #007AFF; color: white; border: none; border-radius: 8px; font-weight: bold; font-family: sans-serif; box-shadow: 0 4px 10px rgba(0,0,0,0.3);"
+    onclick="
+    const text = window._rawLogs.join('\n');
+    
+    // Modern copy method (HTTPS)
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text)
+        .then(() => alert('Copied ' + window._rawLogs.length + ' logs!'))
+        .catch(() => alert('Copy failed.'));
+    } else {
+      // Fallback copy method for older iOS Safari or HTTP connections
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      alert('Copied ' + window._rawLogs.length + ' logs!');
+    }
+  ">
+    📋 Copy All Logs
+  </button>
+
 
 </head>
 
 <body>
-  <!-- Dummy node to unlock AudioContext -->
-  <audio id="iosUnlocker" src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"
-    preload="auto"></audio>
 
   <div class="card">
     <h1>Public Audio Sync</h1>
-    <p>It might take up to 30 seconds for it to sync properly.</p>
+    <p>It might take up to 30 seconds for it to sync properly</p>
     <button id="connectBtn">Connect</button>
     <div id="statusText" class="status disconnected">Disconnected</div>
+    <div class="version">v1.0.1</div>
   </div>
 
   <script type="module" src="app.js"></script>
