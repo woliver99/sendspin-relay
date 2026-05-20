@@ -1,5 +1,4 @@
-webroot.zip
-server.zip
+dist/
 
 # -- direnv --
 *.sw?

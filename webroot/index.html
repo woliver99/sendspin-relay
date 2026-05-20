@@ -61,10 +61,15 @@
 
   <div class="card">
     <h1>Public Audio Sync</h1>
-    <p>It might take up to 30 seconds for it to sync properly</p>
+    <p>It might take up to 60 seconds for it to start playing music</p>
     <button id="connectBtn">Connect</button>
     <div id="statusText" class="status disconnected">Disconnected</div>
     <div class="version">v1.1.0</div>
+  </div>
+
+  <div class="qr-container">
+    <img src="qr.png" alt="Scan to sync" class="qr-code">
+    <p class="qr-text">Scan to sync additional devices</p>
   </div>
 
   <script type="module" src="app.js"></script>
