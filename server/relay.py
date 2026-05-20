@@ -31,10 +31,14 @@ async def upstream_client():
                         "name": "Public Relay",
                         "version": 1,
                         "supported_roles": ["player@v1", "metadata@v1"],
+                        "device_info": {
+                            "product_name": "Public Relay",
+                            "manufacturer": "Maple Network",
+                            "software_version": "1.0.1"
+                        },
                         "player@v1_support": {
                             "supported_formats": [
-                                {"codec": "opus", "channels": 2, "sample_rate": 48000, "bit_depth": 16},
-                                {"codec": "pcm", "channels": 2, "sample_rate": 48000, "bit_depth": 16}
+                                {"codec": "opus", "channels": 2, "sample_rate": 48000, "bit_depth": 16}
                             ],
                             "buffer_capacity": 5000000,
                             "supported_commands": []
@@ -42,6 +46,18 @@ async def upstream_client():
                     }
                 }
                 await ws.send(json.dumps(client_hello))
+                
+                # HAOS Spec enforces a client/state sync IMMEDIATELY after a client/hello
+                client_state = {
+                    "type": "client/state",
+                    "payload": {
+                        "state": "synchronized",
+                        "player": {
+                            "static_delay_ms": 0
+                        }
+                    }
+                }
+                await ws.send(json.dumps(client_state))
                 
                 asyncio.create_task(sync_clock(ws))
                 
@@ -51,7 +67,9 @@ async def upstream_client():
                 async for message in ws:
                     if isinstance(message, str):
                         msg_data = json.loads(message)
-                        if msg_data.get("type") == "server/time":
+                        mtype = msg_data.get("type")
+                        
+                        if mtype == "server/time":
                             st = msg_data["payload"]
                             rx_time = time.time_ns() // 1000
                             round_trip = rx_time - st["client_transmitted"]
@@ -59,7 +77,6 @@ async def upstream_client():
                             continue
                             
                         # Cache important lifecycle packets for new guests
-                        mtype = msg_data.get("type")
                         if mtype in latest_state:
                             latest_state[mtype] = message
                             
