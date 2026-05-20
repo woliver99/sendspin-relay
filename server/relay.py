@@ -100,8 +100,14 @@ async def sync_clock(ws):
             break
 
 async def downstream_server(websocket):
-    print(f"[Downstream] Public client connected: {websocket.remote_address}")
-    connected_clients.add(websocket)
+    try:
+        client_ip = websocket.request.headers.get("X-Real-IP") or (websocket.remote_address[0] if websocket.remote_address else "Unknown")
+    except AttributeError:
+        client_ip = websocket.remote_address[0] if websocket.remote_address else "Unknown"
+        
+    print(f"[Downstream] Socket opened: {client_ip}")
+    client_name = "Unknown"
+    client_name = "Unknown"
     try:
         async for message in websocket:
             if isinstance(message, str):
@@ -109,6 +115,10 @@ async def downstream_server(websocket):
                 mtype = msg_data.get("type")
                 
                 if mtype == "client/hello":
+                    payload = msg_data.get("payload", {})
+                    client_name = payload.get("name", "Unknown guest")
+                    
+                    print(f"[Downstream] Registered: {client_name} ({client_ip})")
                     await websocket.send(json.dumps({
                         "type": "server/hello",
                         "payload": {
@@ -123,6 +133,8 @@ async def downstream_server(websocket):
                     for state_msg in latest_state.values():
                         if state_msg:
                             await websocket.send(state_msg)
+                            
+                    connected_clients.add(websocket)
                             
                 elif mtype == "client/time":
                     rx_time = time.time_ns() // 1000
@@ -141,7 +153,7 @@ async def downstream_server(websocket):
     except Exception as e:
         print(f"[Downstream] Client error: {e}")
     finally:
-        print(f"[Downstream] Public client disconnected: {websocket.remote_address}")
+        print(f"[Downstream] Public client disconnected: {client_name} ({client_ip})")
         connected_clients.discard(websocket)
 
 async def main():

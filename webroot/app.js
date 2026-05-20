@@ -65,7 +65,7 @@ connectBtn.addEventListener("click", async () => {
         isNetworkConnected = true;
 
         // Direct automated success
-        statusText.textContent = "Connected";
+        statusText.textContent = "Syncing";
         statusText.className = "status connected";
         connectBtn.textContent = "Speaker Live";
         console.log("Ready and listening on Sendspin Engine.");
