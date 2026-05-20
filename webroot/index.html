@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="styles.css">
 
   <!-- iOS debugger -->
-
+  <!--
   <script>
     window._rawLogs = [];
     ['log', 'warn', 'error', 'info'].forEach(method => {
@@ -27,11 +27,9 @@
     });
   </script>
 
-  <!-- 2. Your original Eruda scripts -->
   <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
   <script>eruda.init();</script>
 
-  <!-- 3. A floating button added to your webpage to copy everything -->
   <button
     style="position: fixed; top: 15px; left: 15px; z-index: 999999; padding: 12px 18px; background: #007AFF; color: white; border: none; border-radius: 8px; font-weight: bold; font-family: sans-serif; box-shadow: 0 4px 10px rgba(0,0,0,0.3);"
     onclick="
@@ -55,7 +53,7 @@
   ">
     📋 Copy All Logs
   </button>
-
+  -->
 
 </head>
 
@@ -66,7 +64,7 @@
     <p>It might take up to 30 seconds for it to sync properly</p>
     <button id="connectBtn">Connect</button>
     <div id="statusText" class="status disconnected">Disconnected</div>
-    <div class="version">v1.0.1</div>
+    <div class="version">v1.1.0</div>
   </div>
 
   <script type="module" src="app.js"></script>
