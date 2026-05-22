@@ -1,3 +1,7 @@
+const APP_VERSION = "v1.4.9";
+const versionEl = document.getElementById("app-version");
+if (versionEl) versionEl.textContent = APP_VERSION;
+
 import { SILENT_AUDIO_SRC } from './silent-audio.js';
 import { SendspinPlayer } from "./sendspin.js";
 
@@ -167,7 +171,6 @@ import { createSyncGraph, applySyncToneClass, formatSyncValue, getSyncTone } fro
 const connectBtn = document.getElementById("connectBtn");
 const muteBtn = document.getElementById("muteBtn");
 const statusText = document.getElementById("statusText");
-const iosUnlocker = document.getElementById("iosUnlocker");
 
 // Sync Visualization DOM mappings
 const syncPanel = document.getElementById("sendspin-demo-sync-panel");
@@ -447,14 +450,11 @@ async function toggleMuteState(forceMute = null) {
 
     if (nowMuted) {
         muteBtn.classList.add("btn-muted");
+        setMediaSessionStateMuted();
     } else {
         muteBtn.classList.remove("btn-muted");
+        setMediaSessionStatePlaying();
     }
-
-    setMyMediaMetadata({
-        title: 'Public Audio Sync',
-        artist: nowMuted ? 'Stream - Muted' : 'Stream - Playing'
-    });
 }
 
 muteBtn.addEventListener("click", () => toggleMuteState());
