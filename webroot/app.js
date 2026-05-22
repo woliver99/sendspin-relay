@@ -121,17 +121,47 @@ function setMyPositionState(state) {
     }
 }
 
-if ('mediaSession' in navigator) {
-    setMyMediaMetadata({
-        title: 'Public Audio Sync',
-        artist: 'Stream - Disconnected'
-    });
-    setMyPlaybackState("none");
+let lastKnownMediaState = "disconnected";
+let lastMediaSessionRefresh = 0;
 
-    setMyMediaAction('pause', () => stopApplication(false));
-    setMyMediaAction('play', () => null);
-    setMyMediaAction('stop', () => stopApplication(false));
+function setMediaSessionStateDisconnected() {
+    lastKnownMediaState = "disconnected";
+    lastMediaSessionRefresh = Date.now();
+    if ('mediaSession' in navigator) {
+        setMyMediaMetadata({ title: 'Public Audio Sync', artist: 'Stream - Disconnected' });
+        setMyPlaybackState("none");
+        setMyMediaAction('pause', () => stopApplication(false));
+        setMyMediaAction('play', () => null);
+        setMyMediaAction('stop', () => stopApplication(false));
+    }
 }
+
+function setMediaSessionStatePlaying() {
+    lastKnownMediaState = "playing";
+    lastMediaSessionRefresh = Date.now();
+    if ('mediaSession' in navigator) {
+        setMyMediaMetadata({ title: 'Public Audio Sync', artist: 'Stream - Playing' });
+        setMyPlaybackState("playing");
+        try { setMyPositionState({ duration: Infinity, position: 0, playbackRate: 1 }); } catch (e) { }
+    }
+}
+
+function setMediaSessionStateMuted() {
+    lastKnownMediaState = "muted";
+    lastMediaSessionRefresh = Date.now();
+    if ('mediaSession' in navigator) {
+        setMyMediaMetadata({ title: 'Public Audio Sync', artist: 'Stream - Muted' });
+        setMyPlaybackState("playing");
+    }
+}
+
+function refreshMediaSessionState() {
+    if (Date.now() - lastMediaSessionRefresh < 10000) return;
+    if (lastKnownMediaState === "playing") setMediaSessionStatePlaying();
+    else if (lastKnownMediaState === "muted") setMediaSessionStateMuted();
+}
+
+setMediaSessionStateDisconnected();
 
 import { createSyncGraph, applySyncToneClass, formatSyncValue, getSyncTone } from "./sync-graph.js";
 const connectBtn = document.getElementById("connectBtn");
@@ -161,6 +191,7 @@ function resetSyncDisplay() {
 }
 
 let syncUpdateInterval = null;
+let mediaSessionRefreshInterval = null;
 let player = null;
 let isNetworkConnected = false;
 let keepAliveContext = null;
@@ -190,23 +221,7 @@ function startApplication() {
 
     try {
         if ('mediaSession' in navigator) {
-            setMyMediaMetadata({
-                title: 'Public Audio Sync',
-                artist: 'Stream - Playing'
-            });
-            setMyPlaybackState("playing");
-
-            try {
-                setMyPositionState({
-                    duration: Infinity,
-                    position: 0,
-                    playbackRate: 1
-                });
-            } catch (e) {
-                // iOS WebKit strictly rejects Infinity. We safely swallow the error 
-                // because this hack is only necessary for Android anyway.
-                console.warn("[Media Lock] iOS rejected infinite duration, skipping progress bar hack.");
-            }
+            setMediaSessionStatePlaying();
         }
 
         if (!keepAliveContext) {
@@ -248,6 +263,8 @@ function startApplication() {
             androidMediaElement.src = SILENT_AUDIO_SRC;
             androidMediaElement.style.display = "none";
             document.body.appendChild(androidMediaElement);
+            androidMediaElement.addEventListener('pause', () => console.warn("[Android Audio Lock] The native looping audio element was paused unexpectedly by the OS!"));
+            androidMediaElement.addEventListener('play', () => console.log("[Android Audio Lock] Hardware audio element is playing natively."));
             androidMediaElement.play().catch(e => console.log("Android native Wake-lock promise rejected:", e));
         }
 
@@ -319,6 +336,10 @@ async function bootSendspinEngine() {
             }
         }
     });
+
+    if (!mediaSessionRefreshInterval) {
+        mediaSessionRefreshInterval = window.setInterval(refreshMediaSessionState, 10000);
+    }
 
     let badReadingCount = 0;
     let engineStartTime = Date.now();
@@ -452,6 +473,10 @@ function teardownSendspinEngine() {
         window.clearInterval(syncUpdateInterval);
         syncUpdateInterval = null;
     }
+    if (mediaSessionRefreshInterval) {
+        window.clearInterval(mediaSessionRefreshInterval);
+        mediaSessionRefreshInterval = null;
+    }
     resetSyncDisplay();
 
     player = null;
@@ -469,12 +494,7 @@ function stopApplication(requireConfirm = false) {
     */
 
     if ('mediaSession' in navigator) {
-        setMyPlaybackState("none");
-
-        setMyMediaMetadata({
-            title: 'Public Audio Sync',
-            artist: 'Stream - Disconnected'
-        });
+        setMediaSessionStateDisconnected();
     }
 
     teardownSendspinEngine();
