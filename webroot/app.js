@@ -1,4 +1,4 @@
-const APP_VERSION = "v1.4.10";
+const APP_VERSION = "v1.4.11";
 const versionEl = document.getElementById("app-version");
 if (versionEl) versionEl.textContent = APP_VERSION;
 
@@ -305,10 +305,13 @@ async function bootSendspinEngine() {
     const guestId = "guest-" + Math.random().toString(36).substring(2, 7);
     console.log(`Generated guest ID: ${guestId}`);
 
+    const relayUrl = (window.location.protocol === "https:" ? "https://" : "http://") + window.location.hostname + (window.location.port ? ":" + window.location.port : "");
+    console.log("[DEBUG] Generated Relay URL:", relayUrl);
+
     player = new SendspinPlayer({
         playerId: guestId,
         clientName: `Guest Speaker (${guestId})`,
-        baseUrl: "https://sendspin.maplenetwork.ca/ws",
+        baseUrl: relayUrl,
         correctionMode: "sync",
         correctionThresholds: { sync: { resyncAboveMs: 50 } },
         outputMode: "direct",

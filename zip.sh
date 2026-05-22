@@ -6,8 +6,8 @@ rm ../dist/webroot.zip
 zip -r ../dist/webroot.zip .
 cd ../
 
-mkdir -p ./server/
-cd ./server/
-rm ../dist/server.zip
-zip -r ../dist/server.zip .
+mkdir -p ./server-python/
+cd ./server-python/
+rm ../dist/server-python.zip
+zip -r ../dist/server-python.zip .
 cd ../

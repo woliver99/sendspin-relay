@@ -7,5 +7,7 @@ mkShell {
     zip
     python3
     python3Packages.websockets
+    cargo
+    rustc
   ];
 }
