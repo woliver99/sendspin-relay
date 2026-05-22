@@ -14,6 +14,11 @@ if (OriginalAudioContext) {
             globalAudioContextSingleton = this;
 
             // Monkey patch close so player.disconnect() doesn't actually sever the lockscreen hardware node
+            const realClose = super.close.bind(this);
+            this.hardwareClose = async () => {
+                await realClose();
+                globalAudioContextSingleton = null;
+            };
             this.close = async () => {
                 console.log("[AudioContext Sandbox] Swallowed a violent SDK close request to preserve iOS session limits.");
             };
@@ -164,7 +169,7 @@ let androidMediaElement = null;
 let isPlayerReconnecting = false;
 const syncDriftWindow = [];
 
-async function startApplication() {
+function startApplication() {
     // Disconnect any lingering socket
     if (player) {
         try { player.disconnect(); } catch (e) { }
@@ -246,7 +251,7 @@ async function startApplication() {
             androidMediaElement.play().catch(e => console.log("Android native Wake-lock promise rejected:", e));
         }
 
-        await bootSendspinEngine();
+        bootSendspinEngine();
         isNetworkConnected = true;
 
         // Direct automated success
@@ -316,17 +321,19 @@ async function bootSendspinEngine() {
     });
 
     let badReadingCount = 0;
+    let engineStartTime = Date.now();
 
     // Set up the visualization updater
     syncUpdateInterval = window.setInterval(() => {
         if (!player || !player.isConnected) return;
 
         // CHECK OS AUDIO FOCUS LOSS: If iOS/Android violently revokes background audio authorization (e.g. another tab plays a video)
-        if (globalAudioContextSingleton && (globalAudioContextSingleton.state === 'suspended' || globalAudioContextSingleton.state === 'interrupted')) {
+        // Give the OS 3 seconds of grace period during boot to allow the AudioContext resume() promise to fully resolve natively.
+        if ((Date.now() - engineStartTime > 3000) && globalAudioContextSingleton && (globalAudioContextSingleton.state === 'suspended' || globalAudioContextSingleton.state === 'interrupted')) {
             console.warn("[OS-WATCHDOG] Hardware audio focus was entirely revoked by the host OS! Gracefully shutting down application.");
             stopApplication(false);
 
-            statusText.textContent = "Interrupted by another App";
+            statusText.textContent = "Interrupted by another app";
             statusText.className = "status disconnected";
             return;
         }
@@ -398,7 +405,7 @@ async function bootSendspinEngine() {
     try {
         await player.connect();
         console.log("Websocket Network Connected! Issuing Initial Switch...");
-        await player.sendCommand("switch");
+        player.sendCommand("switch");
     } catch (e) {
         console.warn("[NETWORK] Initial Sendspin config stalled (e.g. offline). Handed over to auto-reconnect fallback loop.");
     }
@@ -484,9 +491,14 @@ function stopApplication(requireConfirm = false) {
     }
 
     if (keepAliveContext) {
-        keepAliveContext.close().catch(() => { });
+        if (typeof keepAliveContext.hardwareClose === 'function') {
+            keepAliveContext.hardwareClose().catch(() => { });
+        } else {
+            keepAliveContext.close().catch(() => { });
+        }
         keepAliveContext = null;
     }
+    globalAudioContextSingleton = null;
 
     if (androidMediaElement) {
         androidMediaElement.pause();
