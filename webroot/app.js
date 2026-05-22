@@ -1,3 +1,4 @@
+import { SILENT_AUDIO_SRC } from './silent-audio.js';
 import { SendspinPlayer } from "./sendspin.js";
 
 // Global AudioContext singleton to survive violent Sendspin teardowns on iOS
@@ -21,63 +22,6 @@ if (OriginalAudioContext) {
     window.webkitAudioContext = window.AudioContext;
 }
 
-// --- iOS Audio Kickstart Mechanism (Inspired by Howler.js) ---
-let _audioUnlocked = false;
-function _unlockAudio() {
-    if (_audioUnlocked) return;
-
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return;
-
-    // Because of our monkey patch, this will either return the singleton or create it.
-    const ctx = new AudioCtx();
-
-    if (ctx.state === 'suspended' && typeof ctx.resume === 'function') {
-        ctx.resume();
-    }
-
-    // Play an empty buffer to force OS hardware node unlock
-    const buffer = ctx.createBuffer(1, 1, 22050);
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(ctx.destination);
-
-    if (source.start) {
-        source.start(0);
-    } else {
-        source.noteOn(0);
-    }
-
-    // Attempt to also unlock HTML5 Audio elements
-    const kickElement = document.getElementById("kickAudio");
-    //kickElement.setVolume(100);
-    if (kickElement) {
-        let playPromise = kickElement.play();
-        if (playPromise !== undefined) {
-            playPromise.then(() => {
-                kickElement.pause();
-                kickElement.currentTime = 0;
-            }).catch(() => { });
-        }
-    }
-
-    source.onended = () => {
-        source.disconnect(0);
-        _audioUnlocked = true;
-        document.removeEventListener('touchstart', _unlockAudio, true);
-        document.removeEventListener('touchend', _unlockAudio, true);
-        document.removeEventListener('click', _unlockAudio, true);
-        document.removeEventListener('keydown', _unlockAudio, true);
-        console.log("[iOS Kickstart] Web Audio API unlocked successfully!");
-    };
-}
-
-document.addEventListener('touchstart', _unlockAudio, true);
-document.addEventListener('touchend', _unlockAudio, true);
-document.addEventListener('click', _unlockAudio, true);
-document.addEventListener('keydown', _unlockAudio, true);
-// -------------------------------------------------------------
-
 // Global WebSocket interceptor for stalling diagnostics
 let lastPacketTime = Date.now();
 const activeSockets = new Set();
@@ -99,6 +43,7 @@ window.WebSocket = class extends OriginalWebSocket {
 let originalSetActionHandler = null;
 let originalMetadataSet = null;
 let originalPlaybackStateSet = null;
+let originalSetPositionState = null;
 
 if (window.MediaSession) {
     // 1. Store the original, working browser methods
@@ -135,6 +80,13 @@ if (window.MediaSession) {
             configurable: true
         });
     }
+
+    originalSetPositionState = MediaSession.prototype.setPositionState;
+    if (originalSetPositionState) {
+        MediaSession.prototype.setPositionState = function (state) {
+            console.warn(`[Media Lock] Blocked Sendspin from overwriting positionState.`);
+        };
+    }
 }
 
 // 3. Create private bypass functions exclusively for YOUR code to use
@@ -155,6 +107,12 @@ function setMyPlaybackState(state) {
         originalPlaybackStateSet.call(navigator.mediaSession, state);
     } else if ('mediaSession' in navigator) {
         navigator.mediaSession.playbackState = state;
+    }
+}
+
+function setMyPositionState(state) {
+    if (originalSetPositionState && navigator.mediaSession) {
+        originalSetPositionState.call(navigator.mediaSession, state);
     }
 }
 
@@ -232,6 +190,18 @@ async function startApplication() {
                 artist: 'Stream - Playing'
             });
             setMyPlaybackState("playing");
+
+            try {
+                setMyPositionState({
+                    duration: Infinity,
+                    position: 0,
+                    playbackRate: 1
+                });
+            } catch (e) {
+                // iOS WebKit strictly rejects Infinity. We safely swallow the error 
+                // because this hack is only necessary for Android anyway.
+                console.warn("[Media Lock] iOS rejected infinite duration, skipping progress bar hack.");
+            }
         }
 
         if (!keepAliveContext) {
@@ -270,7 +240,7 @@ async function startApplication() {
             androidMediaElement.loop = true;
             androidMediaElement.preload = "auto";
             androidMediaElement.setAttribute("playsinline", "");
-            androidMediaElement.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+            androidMediaElement.src = SILENT_AUDIO_SRC;
             androidMediaElement.style.display = "none";
             document.body.appendChild(androidMediaElement);
             androidMediaElement.play().catch(e => console.log("Android native Wake-lock promise rejected:", e));
@@ -541,10 +511,25 @@ function stopApplication(requireConfirm = false) {
     console.log("Application stopped.");
 }
 
-connectBtn.addEventListener("click", () => {
+// A lock to prevent mobile browsers from firing touchstart AND click sequentially
+let buttonLock = false;
+
+function handleConnectAction(e) {
+    // If the button is locked from a recent tap, ignore this event
+    if (buttonLock) return;
+
+    // Lock the button for 400ms to block the upcoming "ghost click" on mobile
+    buttonLock = true;
+    setTimeout(() => { buttonLock = false; }, 400);
+
+    // Execute your actual logic
     if (!isAppStarted) {
         startApplication();
     } else {
         stopApplication(true);
     }
-});
+}
+
+// Bind the exact same function to both events
+connectBtn.addEventListener("touchstart", handleConnectAction);
+connectBtn.addEventListener("click", handleConnectAction);
