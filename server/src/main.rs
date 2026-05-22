@@ -96,9 +96,9 @@ async fn main() {
                     let _ = write.send(TungsteniteMessage::Text(json!({"type": "client/command", "payload": {"controller": {"command": "switch"}}}).to_string().into())).await;
 
                     let mut clock_interval = tokio::time::interval(std::time::Duration::from_secs(5));
-                    let (tx_upstream, mut rx_upstream) = tokio::sync::mpsc::channel(100);
+                    let (_tx_upstream, mut rx_upstream) = tokio::sync::mpsc::channel(100);
                     
-                    let mut write_task = tokio::spawn(async move {
+                    let write_task = tokio::spawn(async move {
                         loop {
                             tokio::select! {
                                 _ = clock_interval.tick() => {
@@ -255,7 +255,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, addr: String) {
     let (mut sender, mut receiver) = socket.split();
     let mut broadcast_rx = state.tx.subscribe();
 
-    let (mut tx_user, mut rx_user) = tokio::sync::mpsc::channel::<WsMessage>(10);
+    let (tx_user, mut rx_user) = tokio::sync::mpsc::channel::<WsMessage>(10);
     
     let mut send_task = tokio::spawn(async move {
         loop {
