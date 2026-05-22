@@ -1,4 +1,16 @@
 window._rawLogs = [];
+try {
+    const saved = localStorage.getItem('sendspinDebugLogs');
+    if (saved) {
+        window._rawLogs = JSON.parse(saved);
+        if (!Array.isArray(window._rawLogs)) window._rawLogs = [];
+    }
+} catch (e) {
+    window._rawLogs = [];
+}
+
+const timeStr = new Date().toISOString().split('T')[1].slice(0, -1);
+window._rawLogs.push(`\n=== NEW SESSION [${timeStr}] ===\n`);
 
 // Intercept console logs silently in the background
 ['log', 'warn', 'error', 'info'].forEach(method => {
@@ -13,9 +25,24 @@ window._rawLogs = [];
         const time = new Date().toISOString().split('T')[1].slice(0, -1);
         window._rawLogs.push(`[${time}] [${method.toUpperCase()}] ${parsed.join(' ')}`);
 
+        // Cap arrays so JSON.stringify remains performant and local storage isn't exhausted
+        if (window._rawLogs.length > 2000) {
+            window._rawLogs = window._rawLogs.slice(window._rawLogs.length - 2000);
+        }
+
+        try {
+            localStorage.setItem('sendspinDebugLogs', JSON.stringify(window._rawLogs));
+        } catch (e) { }
+
         original.apply(console, args);
     };
 });
+
+window.clearDebugLogs = function () {
+    window._rawLogs = [];
+    try { localStorage.removeItem('sendspinDebugLogs'); } catch (e) { }
+    console.log("Logs manually cleared.");
+};
 
 // Dedicated copy function
 window.copyDebugLogs = function () {

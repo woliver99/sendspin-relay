@@ -1,4 +1,4 @@
-const APP_VERSION = "v1.4.9";
+const APP_VERSION = "v1.4.10";
 const versionEl = document.getElementById("app-version");
 if (versionEl) versionEl.textContent = APP_VERSION;
 
@@ -160,7 +160,7 @@ function setMediaSessionStateMuted() {
 }
 
 function refreshMediaSessionState() {
-    if (Date.now() - lastMediaSessionRefresh < 10000) return;
+    if (Date.now() - lastMediaSessionRefresh < 5000) return;
     if (lastKnownMediaState === "playing") setMediaSessionStatePlaying();
     else if (lastKnownMediaState === "muted") setMediaSessionStateMuted();
 }
@@ -194,7 +194,6 @@ function resetSyncDisplay() {
 }
 
 let syncUpdateInterval = null;
-let mediaSessionRefreshInterval = null;
 let player = null;
 let isNetworkConnected = false;
 let keepAliveContext = null;
@@ -340,16 +339,14 @@ async function bootSendspinEngine() {
         }
     });
 
-    if (!mediaSessionRefreshInterval) {
-        mediaSessionRefreshInterval = window.setInterval(refreshMediaSessionState, 10000);
-    }
-
     let badReadingCount = 0;
     let engineStartTime = Date.now();
 
     // Set up the visualization updater
     syncUpdateInterval = window.setInterval(() => {
         if (!player || !player.isConnected) return;
+
+        refreshMediaSessionState(); // This only happens every 5 seconds
 
         // CHECK OS AUDIO FOCUS LOSS: If iOS/Android violently revokes background audio authorization (e.g. another tab plays a video)
         // Give the OS 3 seconds of grace period during boot to allow the AudioContext resume() promise to fully resolve natively.
@@ -473,10 +470,7 @@ function teardownSendspinEngine() {
         window.clearInterval(syncUpdateInterval);
         syncUpdateInterval = null;
     }
-    if (mediaSessionRefreshInterval) {
-        window.clearInterval(mediaSessionRefreshInterval);
-        mediaSessionRefreshInterval = null;
-    }
+
     resetSyncDisplay();
 
     player = null;
