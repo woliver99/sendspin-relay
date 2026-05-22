@@ -1,8 +1,9 @@
 use axum::{
     extract::{
         ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
-        State,
+        State, ConnectInfo
     },
+    http::HeaderMap,
     response::IntoResponse,
     routing::get,
     Router,
@@ -185,15 +186,71 @@ async fn main() {
     let addr_str = format!("{}:{}", bind_ip, bind_port);
     let listener = tokio::net::TcpListener::bind(&addr_str).await.unwrap();
     println!("Started Rust WebSockets & Static Proxy on {}", addr_str);
-    axum::serve(listener, app.into_make_service()).await.unwrap();
+    
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .unwrap();
 }
 
-async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    println!("\nSIGTERM / CTRL-C received, shutting down gracefully...");
 }
 
-async fn handle_socket(socket: WebSocket, state: AppState) {
-    let addr = "Unknown Client";
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>, headers: HeaderMap, ConnectInfo(addr): ConnectInfo<SocketAddr>) -> impl IntoResponse {
+    let mut real_ip = addr.ip().to_string();
+    let trusted_proxy_str = std::env::var("TRUSTED_PROXY_IP").unwrap_or_else(|_| "".to_string());
+
+    let mut is_trusted = false;
+    if let Ok(socket_ip) = real_ip.parse::<std::net::IpAddr>() {
+        // Try parsing CIDR (e.g. 10.10.10.0/24)
+        if let Ok(network) = trusted_proxy_str.parse::<ipnet::IpNet>() {
+            is_trusted = network.contains(&socket_ip);
+        } else if real_ip == trusted_proxy_str {
+            // Try exact exact string match if not a valid CIDR
+            is_trusted = true;
+        }
+    } else if real_ip == trusted_proxy_str {
+        is_trusted = true;
+    }
+
+    if is_trusted {
+        if let Some(x_real) = headers.get("x-real-ip") {
+            if let Ok(ip_str) = x_real.to_str() {
+                real_ip = ip_str.to_string();
+            }
+        } else if let Some(x_forwarded) = headers.get("x-forwarded-for") {
+            if let Ok(ip_str) = x_forwarded.to_str() {
+                real_ip = ip_str.split(',').next().unwrap_or(&real_ip).trim().to_string();
+            }
+        }
+    }
+
+    ws.on_upgrade(move |socket| handle_socket(socket, state, real_ip))
+}
+
+async fn handle_socket(socket: WebSocket, state: AppState, addr: String) {
     println!("[Downstream] Socket opened: {}", addr);
     let (mut sender, mut receiver) = socket.split();
     let mut broadcast_rx = state.tx.subscribe();
@@ -213,6 +270,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         }
     });
 
+    let addr_clone = addr.clone();
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = receiver.next().await {
             if let WsMessage::Text(text) = msg {
@@ -221,7 +279,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     if let Some(mtype) = parsed.get("type").and_then(|t| t.as_str()) {
                         if mtype == "client/hello" {
                             let name = parsed.get("payload").and_then(|p| p.get("name")).and_then(|n| n.as_str()).unwrap_or("Unknown");
-                            println!("[Downstream] Registered: {} ({})", name, addr);
+                            println!("[Downstream] Registered: {} ({})", name, addr_clone);
                             
                             let hello = json!({
                                 "type": "server/hello",
