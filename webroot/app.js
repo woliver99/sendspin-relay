@@ -1,5 +1,83 @@
 import { SendspinPlayer } from "./sendspin.js";
 
+// Global AudioContext singleton to survive violent Sendspin teardowns on iOS
+let globalAudioContextSingleton = null;
+const OriginalAudioContext = window.AudioContext || window.webkitAudioContext;
+if (OriginalAudioContext) {
+    window.AudioContext = class extends OriginalAudioContext {
+        constructor(...args) {
+            if (globalAudioContextSingleton) {
+                return globalAudioContextSingleton;
+            }
+            super(...args);
+            globalAudioContextSingleton = this;
+
+            // Monkey patch close so player.disconnect() doesn't actually sever the lockscreen hardware node
+            this.close = async () => {
+                console.log("[AudioContext Sandbox] Swallowed a violent SDK close request to preserve iOS session limits.");
+            };
+        }
+    };
+    window.webkitAudioContext = window.AudioContext;
+}
+
+// --- iOS Audio Kickstart Mechanism (Inspired by Howler.js) ---
+let _audioUnlocked = false;
+function _unlockAudio() {
+    if (_audioUnlocked) return;
+
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+
+    // Because of our monkey patch, this will either return the singleton or create it.
+    const ctx = new AudioCtx();
+
+    if (ctx.state === 'suspended' && typeof ctx.resume === 'function') {
+        ctx.resume();
+    }
+
+    // Play an empty buffer to force OS hardware node unlock
+    const buffer = ctx.createBuffer(1, 1, 22050);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(ctx.destination);
+
+    if (source.start) {
+        source.start(0);
+    } else {
+        source.noteOn(0);
+    }
+
+    // Attempt to also unlock HTML5 Audio elements
+    const kickElement = document.getElementById("kickAudio");
+    //kickElement.setVolume(100);
+    if (kickElement) {
+        let playPromise = kickElement.play();
+        if (playPromise !== undefined) {
+            playPromise.then(() => {
+                kickElement.pause();
+                kickElement.currentTime = 0;
+            }).catch(() => { });
+        }
+    }
+
+    source.onended = () => {
+        source.disconnect(0);
+        _audioUnlocked = true;
+        document.removeEventListener('touchstart', _unlockAudio, true);
+        document.removeEventListener('touchend', _unlockAudio, true);
+        document.removeEventListener('click', _unlockAudio, true);
+        document.removeEventListener('keydown', _unlockAudio, true);
+        console.log("[iOS Kickstart] Web Audio API unlocked successfully!");
+    };
+}
+
+document.addEventListener('touchstart', _unlockAudio, true);
+document.addEventListener('touchend', _unlockAudio, true);
+document.addEventListener('click', _unlockAudio, true);
+document.addEventListener('keydown', _unlockAudio, true);
+// -------------------------------------------------------------
+
 // Global WebSocket interceptor for stalling diagnostics
 let lastPacketTime = Date.now();
 const activeSockets = new Set();
@@ -17,30 +95,84 @@ window.WebSocket = class extends OriginalWebSocket {
     }
 };
 
-// Lock the mediaSession handlers BEFORE sendspin-js can override them.
-// We monkey-patch setActionHandler so the SDK can never steal pause/stop/play.
-if ('mediaSession' in navigator) {
-    const lockedActions = {};
-    const originalSetActionHandler = navigator.mediaSession.setActionHandler.bind(navigator.mediaSession);
+// Global MediaSession interceptor to block Sendspin from hijacking the notification
+let originalSetActionHandler = null;
+let originalMetadataSet = null;
+let originalPlaybackStateSet = null;
 
-    // Register our handlers first
-    lockedActions['pause'] = () => { if (typeof stopApplication === 'function') stopApplication(); };
-    lockedActions['stop'] = () => { if (typeof stopApplication === 'function') stopApplication(); };
-    lockedActions['play'] = () => { if (typeof startApplication === 'function' && !isAppStarted) startApplication(); };
+if (window.MediaSession) {
+    // 1. Store the original, working browser methods
+    originalSetActionHandler = MediaSession.prototype.setActionHandler;
+    const metadataDesc = Object.getOwnPropertyDescriptor(MediaSession.prototype, 'metadata');
+    originalMetadataSet = metadataDesc ? metadataDesc.set : null;
+    const playbackDesc = Object.getOwnPropertyDescriptor(MediaSession.prototype, 'playbackState');
 
-    originalSetActionHandler('pause', lockedActions['pause']);
-    originalSetActionHandler('stop', lockedActions['stop']);
-    originalSetActionHandler('play', lockedActions['play']);
+    if (playbackDesc && playbackDesc.set) {
+        originalPlaybackStateSet = playbackDesc.set;
+    }
 
-    // Block sendspin-js from overwriting our handlers
-    navigator.mediaSession.setActionHandler = (action, handler) => {
-        if (action in lockedActions) return; // silently swallow
-        originalSetActionHandler(action, handler);
+    // 2. Overwrite the public methods with duds to block external libraries
+    MediaSession.prototype.setActionHandler = function (action, handler) {
+        console.warn(`[Media Lock] Blocked Sendspin from overwriting '${action}' action.`);
     };
+
+    if (originalMetadataSet) {
+        Object.defineProperty(MediaSession.prototype, 'metadata', {
+            set: function (val) {
+                console.warn(`[Media Lock] Blocked Sendspin from overwriting metadata.`);
+            },
+            get: metadataDesc.get
+        });
+    }
+
+    // Also block playbackState overwrites from the SDK
+    if (originalPlaybackStateSet) {
+        Object.defineProperty(MediaSession.prototype, 'playbackState', {
+            set: function (val) {
+                console.warn(`[Media Lock] Blocked Sendspin from overwriting playbackState to '${val}'.`);
+            },
+            get: playbackDesc.get,
+            configurable: true
+        });
+    }
+}
+
+// 3. Create private bypass functions exclusively for YOUR code to use
+function setMyMediaAction(action, handler) {
+    if (originalSetActionHandler && navigator.mediaSession) {
+        originalSetActionHandler.call(navigator.mediaSession, action, handler);
+    }
+}
+
+function setMyMediaMetadata(config) {
+    if (originalMetadataSet && navigator.mediaSession) {
+        originalMetadataSet.call(navigator.mediaSession, new MediaMetadata(config));
+    }
+}
+
+function setMyPlaybackState(state) {
+    if (originalPlaybackStateSet && navigator.mediaSession) {
+        originalPlaybackStateSet.call(navigator.mediaSession, state);
+    } else if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = state;
+    }
+}
+
+if ('mediaSession' in navigator) {
+    setMyMediaMetadata({
+        title: 'Public Audio Sync',
+        artist: 'Stream - Disconnected'
+    });
+    setMyPlaybackState("none");
+
+    setMyMediaAction('pause', () => stopApplication(false));
+    setMyMediaAction('play', () => null);
+    setMyMediaAction('stop', () => stopApplication(false));
 }
 
 import { createSyncGraph, applySyncToneClass, formatSyncValue, getSyncTone } from "./sync-graph.js";
 const connectBtn = document.getElementById("connectBtn");
+const muteBtn = document.getElementById("muteBtn");
 const statusText = document.getElementById("statusText");
 const iosUnlocker = document.getElementById("iosUnlocker");
 
@@ -69,6 +201,8 @@ let syncUpdateInterval = null;
 let player = null;
 let isNetworkConnected = false;
 let keepAliveContext = null;
+let iosWakeLockAudio = null;
+let androidMediaElement = null;
 let isPlayerReconnecting = false;
 const syncDriftWindow = [];
 
@@ -92,30 +226,35 @@ async function startApplication() {
     statusText.className = "status connecting";
 
     try {
-        // ---- iOS SILENCE WAKE-LOCK ----
-        // iOS kills raw AudioContext oscillators. But if we pump the oscillator mathematically 
-        // into a RAW HTML5 MediaStream Element, Apple's hardware locks onto the raw pipe and holds
-        // the background process alive indefinitely as if we were streaming a real Spotify radio!
+        if ('mediaSession' in navigator) {
+            setMyMediaMetadata({
+                title: 'Public Audio Sync',
+                artist: 'Stream - Playing'
+            });
+            setMyPlaybackState("playing");
+        }
+
         if (!keepAliveContext) {
             keepAliveContext = new (window.AudioContext || window.webkitAudioContext)();
+
+            // Background wake-lock oscillator (silent, routed through MediaStream only)
             const oscillator = keepAliveContext.createOscillator();
             const gainNode = keepAliveContext.createGain();
 
-            oscillator.type = 'triangle'; // Complex geometry prevents zero-optimizations
+            oscillator.type = 'triangle';
             oscillator.frequency.value = 50;
-            gainNode.gain.value = 0.001; // Ultra quiet 
+            gainNode.gain.value = 0.001;
 
             const dest = keepAliveContext.createMediaStreamDestination();
             oscillator.connect(gainNode);
             gainNode.connect(dest);
             oscillator.start();
 
-            // The magical hardware lock
-            const wakeLockAudio = document.createElement("audio");
-            wakeLockAudio.srcObject = dest.stream;
-            wakeLockAudio.loop = true;
-            wakeLockAudio.play().catch(e => console.log("iOS Wake-lock promise rejected:", e));
-
+            iosWakeLockAudio = document.createElement("audio");
+            iosWakeLockAudio.srcObject = dest.stream;
+            iosWakeLockAudio.loop = true;
+            iosWakeLockAudio.style.display = "none";
+            document.body.appendChild(iosWakeLockAudio);
 
             if (keepAliveContext.state === 'suspended') {
                 keepAliveContext.resume();
@@ -123,120 +262,21 @@ async function startApplication() {
             console.log("Background HTMLAudio MediaStream Wake-Lock spun up successfully!");
         }
 
-        // The magical Android MediaSession hardware lock
-        const androidAudio = document.getElementById("androidWakeLockAudio");
-        if (androidAudio) {
-            androidAudio.play().catch(e => console.log("Android Wake-lock promise rejected:", e));
+        if (iosWakeLockAudio) iosWakeLockAudio.play().catch(e => console.log("Oscillator Wake-lock promise rejected:", e));
+
+        // Native media-element mode to reliably satisfy MediaSession OS restrictions globally.
+        if (!androidMediaElement) {
+            androidMediaElement = document.createElement("audio");
+            androidMediaElement.loop = true;
+            androidMediaElement.preload = "auto";
+            androidMediaElement.setAttribute("playsinline", "");
+            androidMediaElement.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+            androidMediaElement.style.display = "none";
+            document.body.appendChild(androidMediaElement);
+            androidMediaElement.play().catch(e => console.log("Android native Wake-lock promise rejected:", e));
         }
 
-        const guestId = "guest-" + Math.random().toString(36).substring(2, 7);
-        console.log(`Generated guest ID: ${guestId}`);
-
-        player = new SendspinPlayer({
-            playerId: guestId,
-            clientName: `Guest Speaker (${guestId})`,
-            baseUrl: "https://sendspin.maplenetwork.ca/ws",
-            correctionMode: "sync",
-            correctionThresholds: { sync: { resyncAboveMs: 50 } },
-            outputMode: "direct", // Bypass iOS HTMLAudio tag blocking
-            reconnect: {
-                baseDelayMs: 1000,
-                maxDelayMs: 15000,
-                maxAttempts: Infinity,
-                onReconnecting: (attempt) => {
-                    isPlayerReconnecting = true;
-                    statusText.className = "status connecting";
-                },
-                onReconnected: () => {
-                    isPlayerReconnecting = false;
-                    statusText.className = "status connected";
-                    lastPacketTime = Date.now();
-                }
-            },
-            onStateChange: (state) => {
-                if (!isNetworkConnected) return;
-
-                if (state.groupState && state.groupState.group_id) {
-                    console.log(`Group updated: ${state.groupState.group_name} (${state.groupState.group_id})`);
-                } else if (state.playerState === 'synchronized') {
-                    console.log("Player synchronized but not in a group.");
-                }
-            }
-        });
-
-        // Set up the visualization updater
-        syncUpdateInterval = window.setInterval(() => {
-            if (!player || !player.isConnected) return;
-
-            const syncInfo = player.syncInfo ?? {};
-            const syncMs = typeof syncInfo.syncErrorMs === "number" && Number.isFinite(syncInfo.syncErrorMs)
-                ? syncInfo.syncErrorMs
-                : null;
-
-            // Rolling sync drift monitor: if 5+ of the last 20 readings exceed ±100ms, force restart
-            if (syncMs !== null) {
-                syncDriftWindow.push(Math.abs(syncMs));
-                if (syncDriftWindow.length > 20) syncDriftWindow.shift();
-
-                if (syncDriftWindow.length === 20) {
-                    const badCount = syncDriftWindow.filter(v => v > 100).length;
-                    if (badCount >= 5) {
-                        console.warn(`[SYNC-WATCHDOG] ${badCount}/20 readings exceeded 100ms. Forcing hard restart...`);
-                        syncDriftWindow.length = 0;
-                        stopApplication();
-                        setTimeout(() => startApplication(), 1000);
-                        return;
-                    }
-                }
-            }
-
-            // Debugging staleness readout
-            const secondsSincePacket = ((Date.now() - lastPacketTime) / 1000).toFixed(1);
-            if (!player.isPlaying || syncMs === null) {
-                resetSyncDisplay();
-                if (isPlayerReconnecting) {
-                    statusText.textContent = `Reconnecting... (${secondsSincePacket}s dead)`;
-                    statusText.className = "status connecting";
-                } else {
-                    statusText.textContent = player.isConnected ? `Connected (Idle: ${secondsSincePacket}s)` : "Disconnected";
-                }
-            } else {
-                isPlayerReconnecting = false;
-                statusText.textContent = `Syncing (Last message: ${secondsSincePacket}s ago)`;
-                renderSyncDisplay({
-                    label: formatSyncValue(syncMs),
-                    tone: getSyncTone(syncMs),
-                    syncMs,
-                });
-            }
-
-            // Forceful reconnection on dead OS-level socket suspend (iOS/Desktop sleep)
-            if (player.isConnected && (Date.now() - lastPacketTime) > 30000) {
-                console.warn(`[WATCHDOG] Connection stalled for >30s. Triggering synthetic protocol teardown...`);
-
-                for (const ws of activeSockets) {
-                    try {
-                        ws.close();
-                        // iOS Safari WebKit BUG: If a socket is physically dead, ws.close() blocks 
-                        // infinitely and NEVER dispatches the onclose event to JS.
-                        // We must synthetically fire it so SendspinPlayer starts its backoff protocol.
-                        if (typeof ws.onclose === "function") {
-                            ws.onclose(new Event("close"));
-                        }
-                    } catch (e) { console.error(e); }
-                }
-                activeSockets.clear();
-            }
-        }, 250);
-
-        console.log("Waiting for network backend (await connect)...");
-
-        // Network Call yields event loop (AudioContext is permanently granted by now)
-        await player.connect();
-
-        console.log("Websocket Network Connected! Issuing Switch...");
-        await player.sendCommand("switch");
-
+        await bootSendspinEngine();
         isNetworkConnected = true;
 
         // Direct automated success
@@ -245,8 +285,12 @@ async function startApplication() {
 
         // Transform the Connect button into a Stop button
         connectBtn.disabled = false;
-        connectBtn.textContent = "Stop";
+        connectBtn.textContent = "Disconnect";
+        connectBtn.classList.add("btn-disconnect");
+        muteBtn.style.display = "inline-block";
+        muteBtn.textContent = "Mute";
         isAppStarted = true;
+        isLocalMuted = false;
 
         console.log("Ready and listening on Sendspin Engine.");
 
@@ -263,9 +307,161 @@ async function startApplication() {
     }
 }
 
-let isAppStarted = false;
+async function bootSendspinEngine() {
+    const guestId = "guest-" + Math.random().toString(36).substring(2, 7);
+    console.log(`Generated guest ID: ${guestId}`);
 
-function stopApplication() {
+    player = new SendspinPlayer({
+        playerId: guestId,
+        clientName: `Guest Speaker (${guestId})`,
+        baseUrl: "https://sendspin.maplenetwork.ca/ws",
+        correctionMode: "sync",
+        correctionThresholds: { sync: { resyncAboveMs: 50 } },
+        outputMode: "direct",
+        reconnect: {
+            baseDelayMs: 1000,
+            maxDelayMs: 15000,
+            maxAttempts: Infinity,
+            onReconnecting: (attempt) => {
+                isPlayerReconnecting = true;
+                statusText.className = "status connecting";
+            },
+            onReconnected: () => {
+                isPlayerReconnecting = false;
+                statusText.className = "status connected";
+                lastPacketTime = Date.now();
+                // In an offline-restart scenario, the player might reconnect arbitrarily. We must re-arm the relay.
+                try { player.sendCommand("switch"); } catch (e) { console.error("Failed to re-arm switch:", e); }
+            }
+        },
+        onStateChange: (state) => {
+            if (!isNetworkConnected) return;
+
+            if (state.groupState && state.groupState.group_id) {
+                console.log(`Group updated: ${state.groupState.group_name} (${state.groupState.group_id})`);
+            } else if (state.playerState === 'synchronized') {
+                console.log("Player synchronized but not in a group.");
+            }
+        }
+    });
+
+    let badReadingCount = 0;
+
+    // Set up the visualization updater
+    syncUpdateInterval = window.setInterval(() => {
+        if (!player || !player.isConnected) return;
+
+        // CHECK OS AUDIO FOCUS LOSS: If iOS/Android violently revokes background audio authorization (e.g. another tab plays a video)
+        if (globalAudioContextSingleton && (globalAudioContextSingleton.state === 'suspended' || globalAudioContextSingleton.state === 'interrupted')) {
+            console.warn("[OS-WATCHDOG] Hardware audio focus was entirely revoked by the host OS! Gracefully shutting down application.");
+            stopApplication(false);
+
+            statusText.textContent = "Interrupted by another App";
+            statusText.className = "status disconnected";
+            return;
+        }
+
+        const syncInfo = player.syncInfo ?? {};
+        const syncMs = typeof syncInfo.syncErrorMs === "number" && Number.isFinite(syncInfo.syncErrorMs)
+            ? syncInfo.syncErrorMs
+            : null;
+
+        // O(1) Amortized Watchdog: Over a 100-sample window (25 seconds), if 20+ readings exceed ±100ms, force restart.
+        if (syncMs !== null) {
+            const isBad = Math.abs(syncMs) > 100;
+
+            if (syncDriftWindow.length >= 100) {
+                const popped = syncDriftWindow.shift();
+                if (popped > 100) badReadingCount--;
+            }
+
+            syncDriftWindow.push(Math.abs(syncMs));
+            if (isBad) badReadingCount++;
+
+            if (syncDriftWindow.length === 100 && badReadingCount >= 20) {
+                console.warn(`[SYNC-WATCHDOG] ${badReadingCount}/100 readings exceeded 100ms. Forcing Engine restart...`);
+                syncDriftWindow.length = 0;
+                badReadingCount = 0;
+                teardownSendspinEngine();
+                setTimeout(() => bootSendspinEngine(), 1000);
+                return;
+            }
+        }
+
+        // Debugging staleness readout
+        const secondsSincePacket = ((Date.now() - lastPacketTime) / 1000).toFixed(1);
+        if (!player.isPlaying || syncMs === null) {
+            resetSyncDisplay();
+            if (isPlayerReconnecting) {
+                statusText.textContent = `Reconnecting... (${secondsSincePacket}s dead)`;
+                statusText.className = "status connecting";
+            } else {
+                statusText.textContent = player.isConnected ? `Connected (Idle: ${secondsSincePacket}s)` : "Disconnected";
+            }
+        } else {
+            isPlayerReconnecting = false;
+            statusText.textContent = `Syncing (${secondsSincePacket}s)`;
+            renderSyncDisplay({
+                label: formatSyncValue(syncMs),
+                tone: getSyncTone(syncMs),
+                syncMs,
+            });
+        }
+
+        // Forceful reconnection on dead OS-level socket suspend (iOS/Desktop sleep)
+        if (player.isConnected && (Date.now() - lastPacketTime) > 30000) {
+            console.warn(`[CONNECTION-WATCHDOG] Connection stalled for >30s. Triggering synthetic protocol teardown...`);
+
+            for (const ws of activeSockets) {
+                try {
+                    ws.close();
+                    if (typeof ws.onclose === "function") {
+                        ws.onclose(new Event("close"));
+                    }
+                } catch (e) { console.error(e); }
+            }
+            activeSockets.clear();
+        }
+    }, 250);
+
+    console.log("Waiting for network backend (await connect)...");
+    try {
+        await player.connect();
+        console.log("Websocket Network Connected! Issuing Initial Switch...");
+        await player.sendCommand("switch");
+    } catch (e) {
+        console.warn("[NETWORK] Initial Sendspin config stalled (e.g. offline). Handed over to auto-reconnect fallback loop.");
+    }
+}
+
+let isAppStarted = false;
+let isLocalMuted = false;
+
+async function toggleMuteState(forceMute = null) {
+    if (!player) return;
+
+    const nowMuted = forceMute !== null ? forceMute : !isLocalMuted;
+    isLocalMuted = nowMuted;
+
+    player.setVolume(nowMuted ? 1 : 100);
+
+    muteBtn.textContent = nowMuted ? "Unmute" : "Mute";
+
+    if (nowMuted) {
+        muteBtn.classList.add("btn-muted");
+    } else {
+        muteBtn.classList.remove("btn-muted");
+    }
+
+    setMyMediaMetadata({
+        title: 'Public Audio Sync',
+        artist: nowMuted ? 'Stream - Muted' : 'Stream - Playing'
+    });
+}
+
+muteBtn.addEventListener("click", () => toggleMuteState());
+
+function teardownSendspinEngine() {
     if (!player) return;
 
     try { player.disconnect(); } catch (e) { }
@@ -279,14 +475,55 @@ function stopApplication() {
         window.clearInterval(syncUpdateInterval);
         syncUpdateInterval = null;
     }
+    resetSyncDisplay();
+
+    player = null;
+    isNetworkConnected = false;
+    isPlayerReconnecting = false;
+}
+
+function stopApplication(requireConfirm = false) {
+    if (!player && !isAppStarted) return;
+
+    /*
+    if (requireConfirm && !confirm("Are you sure you want to disconnect? The audio session will be dropped.")) {
+        return;
+    }
+    */
+
+    if ('mediaSession' in navigator) {
+        setMyPlaybackState("none");
+
+        setMyMediaMetadata({
+            title: 'Public Audio Sync',
+            artist: 'Stream - Disconnected'
+        });
+    }
+
+    teardownSendspinEngine();
+
     syncGraph.stop();
     syncGraph.reset();
     syncPanel.setAttribute("aria-hidden", "true");
-    resetSyncDisplay();
 
-    // Pause the Android wake-lock audio so the lockscreen clears
-    const androidAudio = document.getElementById("androidWakeLockAudio");
-    if (androidAudio) androidAudio.pause();
+    // Teardown the specific OS wake-locks to force a hard user restart upon next Connect
+    if (iosWakeLockAudio) {
+        iosWakeLockAudio.pause();
+        iosWakeLockAudio.srcObject = null;
+        iosWakeLockAudio = null;
+    }
+
+    if (keepAliveContext) {
+        keepAliveContext.close().catch(() => { });
+        keepAliveContext = null;
+    }
+
+    if (androidMediaElement) {
+        androidMediaElement.pause();
+        androidMediaElement.src = "";
+        androidMediaElement.remove();
+        androidMediaElement = null;
+    }
 
     player = null;
     isNetworkConnected = false;
@@ -295,6 +532,9 @@ function stopApplication() {
 
     connectBtn.disabled = false;
     connectBtn.textContent = "Connect";
+    connectBtn.classList.remove("btn-disconnect");
+    muteBtn.classList.remove("btn-muted");
+    muteBtn.style.display = "none";
     statusText.textContent = "Disconnected";
     statusText.className = "status disconnected";
 
@@ -305,6 +545,6 @@ connectBtn.addEventListener("click", () => {
     if (!isAppStarted) {
         startApplication();
     } else {
-        stopApplication();
+        stopApplication(true);
     }
 });

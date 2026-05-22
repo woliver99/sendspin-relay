@@ -23,6 +23,7 @@
     <h1>Public Audio Sync</h1>
     <p>It might take up to 60 seconds for it to start playing music</p>
     <button id="connectBtn">Connect</button>
+    <button id="muteBtn" style="display: none; margin-top: 10px;">Mute</button>
     <div id="statusText" class="status disconnected">Disconnected</div>
 
     <div id="sendspin-demo-sync-panel" class="demo-card__sync" aria-hidden="true">
@@ -35,7 +36,7 @@
       </div>
     </div>
 
-    <div class="version">v1.3.1</div>
+    <div class="version">v1.4.6</div>
   </div>
 
   <div class="qr-container">
@@ -44,9 +45,7 @@
   </div>
 
   <button class="copy-logs-btn" onclick="copyDebugLogs()">📋 Copy Debug Logs</button>
-
-  <audio id="androidWakeLockAudio" loop preload="auto" playsinline
-    src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"></audio>
+  <audio id="kickAudio" src="kick.wav" preload="auto"></audio>
   <script type="module" src="app.js"></script>
 </body>
 

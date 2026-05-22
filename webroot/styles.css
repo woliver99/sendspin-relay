@@ -63,6 +63,31 @@ button:disabled {
     transform: none;
 }
 
+#muteBtn {
+    background: #0277bd;
+    color: white;
+}
+
+#muteBtn:hover {
+    background: #01579b;
+}
+
+#muteBtn.btn-muted {
+    background: #ff5722;
+}
+
+#muteBtn.btn-muted:hover {
+    background: #ff5722;
+}
+
+#connectBtn.btn-disconnect {
+    background: #c62828;
+}
+
+#connectBtn.btn-disconnect:hover {
+    background: #b71c1c;
+}
+
 .status {
     margin-top: 20px;
     font-weight: 500;
