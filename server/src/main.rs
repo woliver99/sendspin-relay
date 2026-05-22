@@ -48,7 +48,7 @@ async fn main() {
     };
 
     let haos_url = "ws://haos.lan.maplenetwork.ca:8927/sendspin";
-    let bind_ip = std::env::var("SERVER_IP").unwrap_or_else(|_| "0.0.0.0".to_string());
+    let bind_ip = std::env::var("BIND_IP").unwrap_or_else(|_| "0.0.0.0".to_string());
     let bind_port = std::env::var("SERVER_PORT").unwrap_or_else(|_| "8000".to_string());
 
     let state_clone = app_state.clone();
