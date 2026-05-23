@@ -1,4 +1,4 @@
-const APP_VERSION = "v1.4.15";
+const APP_VERSION = "v1.4.14";
 const versionEl = document.getElementById("app-version");
 if (versionEl) versionEl.textContent = APP_VERSION;
 
@@ -274,11 +274,9 @@ function startApplication() {
             androidMediaElement.style.display = "none";
             document.body.appendChild(androidMediaElement);
             androidMediaElement.addEventListener('pause', () => {
-                console.warn("[Media Lock] The native hardware loop was brutally shot down by Android OS!");
-                if (isAppStarted) {
-                    stopApplication(false);
-                    statusText.textContent = "Interrupted by system";
-                    statusText.className = "status disconnected";
+                console.warn("[Android Audio Lock] The native looping audio element was forcefully paused by the OS! Attempting instant auto-resume...");
+                if (isAppStarted && androidMediaElement) {
+                    androidMediaElement.play().catch(e => console.warn("[Android Audio Lock] Instant auto-resume rejected by OS:", e));
                 }
             });
             androidMediaElement.addEventListener('play', () => console.log("[Android Audio Lock] Hardware audio element is playing natively."));
