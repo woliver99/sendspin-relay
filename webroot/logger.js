@@ -6,6 +6,10 @@ try {
     if (saved) {
         window._rawLogs = JSON.parse(saved);
         if (!Array.isArray(window._rawLogs)) window._rawLogs = [];
+        if (window._rawLogs.length > MAX_LOG_LINES) {
+            window._rawLogs = window._rawLogs.slice(-MAX_LOG_LINES);
+            try { localStorage.setItem('sendspinDebugLogs', JSON.stringify(window._rawLogs)); } catch (e) { }
+        }
     }
 } catch (e) {
     window._rawLogs = [];
@@ -29,7 +33,7 @@ window._rawLogs.push(`\n=== NEW SESSION [${timeStr}] ===\n`);
 
         // Cap arrays so JSON.stringify remains performant and local storage isn't exhausted
         if (window._rawLogs.length > MAX_LOG_LINES) {
-            window._rawLogs = window._rawLogs.slice(window._rawLogs.length - MAX_LOG_LINES);
+            window._rawLogs = window._rawLogs.slice(-MAX_LOG_LINES);
         }
 
         try {
