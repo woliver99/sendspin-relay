@@ -1,4 +1,4 @@
-const APP_VERSION = "v1.4.13";
+const APP_VERSION = "v1.4.14";
 const versionEl = document.getElementById("app-version");
 if (versionEl) versionEl.textContent = APP_VERSION;
 
@@ -273,7 +273,12 @@ function startApplication() {
             androidMediaElement.src = SILENT_AUDIO_SRC;
             androidMediaElement.style.display = "none";
             document.body.appendChild(androidMediaElement);
-            androidMediaElement.addEventListener('pause', () => console.warn("[Android Audio Lock] The native looping audio element was paused unexpectedly by the OS!"));
+            androidMediaElement.addEventListener('pause', () => {
+                console.warn("[Android Audio Lock] The native looping audio element was forcefully paused by the OS! Attempting instant auto-resume...");
+                if (isAppStarted && androidMediaElement) {
+                    androidMediaElement.play().catch(e => console.warn("[Android Audio Lock] Instant auto-resume rejected by OS:", e));
+                }
+            });
             androidMediaElement.addEventListener('play', () => console.log("[Android Audio Lock] Hardware audio element is playing natively."));
             androidMediaElement.play().catch(e => console.log("Android native Wake-lock promise rejected:", e));
         }
