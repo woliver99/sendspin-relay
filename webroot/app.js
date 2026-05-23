@@ -1,4 +1,4 @@
-const APP_VERSION = "v1.4.12";
+const APP_VERSION = "v1.4.13";
 const versionEl = document.getElementById("app-version");
 if (versionEl) versionEl.textContent = APP_VERSION;
 
@@ -137,6 +137,7 @@ function setMediaSessionStateDisconnected() {
         setMyMediaAction('pause', () => stopApplication(false));
         setMyMediaAction('play', () => null);
         setMyMediaAction('stop', () => stopApplication(false));
+        try { setMyPositionState({ duration: Infinity, position: 0, playbackRate: 1 }); } catch (e) { }
     }
 }
 
@@ -146,6 +147,9 @@ function setMediaSessionStatePlaying() {
     if ('mediaSession' in navigator) {
         setMyMediaMetadata({ title: 'Public Audio Sync', artist: 'Stream - Playing' });
         setMyPlaybackState("playing");
+        setMyMediaAction('pause', () => stopApplication(false));
+        setMyMediaAction('play', () => null);
+        setMyMediaAction('stop', () => stopApplication(false));
         try { setMyPositionState({ duration: Infinity, position: 0, playbackRate: 1 }); } catch (e) { }
     }
 }
@@ -156,6 +160,10 @@ function setMediaSessionStateMuted() {
     if ('mediaSession' in navigator) {
         setMyMediaMetadata({ title: 'Public Audio Sync', artist: 'Stream - Muted' });
         setMyPlaybackState("playing");
+        setMyMediaAction('pause', () => stopApplication(false));
+        setMyMediaAction('play', () => null);
+        setMyMediaAction('stop', () => stopApplication(false));
+        try { setMyPositionState({ duration: Infinity, position: 0, playbackRate: 1 }); } catch (e) { }
     }
 }
 
