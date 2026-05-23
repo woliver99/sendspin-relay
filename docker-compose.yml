@@ -5,7 +5,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - BIND_IP=0.0.0.0
+      - SENDSPIN_URL=ws://haos.lan:8927/sendspin
       - SERVER_PORT=8000
       # - TRUSTED_PROXY_IP=10.10.10.0/24
+      # - BIND_IP=0.0.0.0
     restart: always

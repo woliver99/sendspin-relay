@@ -23,12 +23,14 @@ use tower_http::{
 };
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Clone)]
 struct AppState {
     tx: broadcast::Sender<WsMessage>,
     server_offset: Arc<Mutex<i64>>,
     latest_state: Arc<Mutex<HashMap<String, String>>>,
+    active_connections: Arc<AtomicUsize>,
 }
 
 fn current_time_micros() -> i64 {
@@ -45,18 +47,19 @@ async fn main() {
         tx,
         server_offset: Arc::new(Mutex::new(0)),
         latest_state: Arc::new(Mutex::new(HashMap::new())),
+        active_connections: Arc::new(AtomicUsize::new(0)),
     };
 
-    let haos_url = "ws://haos.lan.maplenetwork.ca:8927/sendspin";
+    let sendspin_url = std::env::var("SENDSPIN_URL").expect("FATAL: SENDSPIN_URL environment variable is missing and strictly required to start.");
     let bind_ip = std::env::var("BIND_IP").unwrap_or_else(|_| "0.0.0.0".to_string());
     let bind_port = std::env::var("SERVER_PORT").unwrap_or_else(|_| "8000".to_string());
 
     let state_clone = app_state.clone();
     tokio::spawn(async move {
         loop {
-            match connect_async(haos_url).await {
+            match connect_async(&sendspin_url).await {
                 Ok((upstream_ws, _)) => {
-                    println!("[Upstream] Connected to HAOS Server");
+                    println!("[Upstream] Connected to Sendspin Server");
 
                     let (mut write, mut read) = upstream_ws.split();
 
@@ -180,6 +183,7 @@ async fn main() {
     let app = Router::new()
         .fallback_service(ServeDir::new(webroot_path))
         .route("/sendspin", get(ws_handler))
+        .route("/api/stats", get(stats_handler))
         .layer(cors)
         .with_state(app_state);
 
@@ -191,6 +195,13 @@ async fn main() {
         .with_graceful_shutdown(shutdown_signal())
         .await
         .unwrap();
+}
+
+async fn stats_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let totals = state.active_connections.load(Ordering::SeqCst);
+    axum::Json(json!({
+        "total_connected": totals
+    }))
 }
 
 async fn shutdown_signal() {
@@ -251,6 +262,7 @@ async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>, headers
 }
 
 async fn handle_socket(socket: WebSocket, state: AppState, addr: String) {
+    state.active_connections.fetch_add(1, Ordering::SeqCst);
     println!("[Downstream] Socket opened: {}", addr);
     let (mut sender, mut receiver) = socket.split();
     let mut broadcast_rx = state.tx.subscribe();
@@ -280,7 +292,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, addr: String) {
                         if mtype == "client/hello" {
                             let name = parsed.get("payload").and_then(|p| p.get("name")).and_then(|n| n.as_str()).unwrap_or("Unknown");
                             println!("[Downstream] Registered: {} ({})", name, addr_clone);
-                            
+
                             let hello = json!({
                                 "type": "server/hello",
                                 "payload": {
@@ -322,5 +334,6 @@ async fn handle_socket(socket: WebSocket, state: AppState, addr: String) {
         _ = (&mut recv_task) => send_task.abort(),
     };
 
+    state.active_connections.fetch_sub(1, Ordering::SeqCst);
     println!("[Downstream] Public client disconnected: {}", addr);
 }

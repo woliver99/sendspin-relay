@@ -1,4 +1,4 @@
-const APP_VERSION = "v1.4.11";
+const APP_VERSION = "v1.4.12";
 const versionEl = document.getElementById("app-version");
 if (versionEl) versionEl.textContent = APP_VERSION;
 
@@ -313,7 +313,7 @@ async function bootSendspinEngine() {
         clientName: `Guest Speaker (${guestId})`,
         baseUrl: relayUrl,
         correctionMode: "sync",
-        correctionThresholds: { sync: { resyncAboveMs: 50 } },
+        correctionThresholds: { sync: { resyncAboveMs: 20 } },
         outputMode: "direct",
         reconnect: {
             baseDelayMs: 1000,
@@ -367,20 +367,24 @@ async function bootSendspinEngine() {
             ? syncInfo.syncErrorMs
             : null;
 
-        // O(1) Amortized Watchdog: Over a 100-sample window (25 seconds), if 20+ readings exceed ±100ms, force restart.
-        if (syncMs !== null) {
-            const isBad = Math.abs(syncMs) > 100;
+        const WATCHDOG_MAX_DRIFT_MS = 50;
+        const WATCHDOG_WINDOW_SIZE = 120;
+        const WATCHDOG_VIOLATION_LIMIT = 40;
 
-            if (syncDriftWindow.length >= 100) {
+        // Sync Watchdog: Over a sliding sample window, if X+ readings exceed ±MAX_MS, force restart.
+        if (syncMs !== null) {
+            const isBad = Math.abs(syncMs) > WATCHDOG_MAX_DRIFT_MS;
+
+            if (syncDriftWindow.length >= WATCHDOG_WINDOW_SIZE) {
                 const popped = syncDriftWindow.shift();
-                if (popped > 100) badReadingCount--;
+                if (popped > WATCHDOG_MAX_DRIFT_MS) badReadingCount--;
             }
 
             syncDriftWindow.push(Math.abs(syncMs));
             if (isBad) badReadingCount++;
 
-            if (syncDriftWindow.length === 100 && badReadingCount >= 20) {
-                console.warn(`[SYNC-WATCHDOG] ${badReadingCount}/100 readings exceeded 100ms. Forcing Engine restart...`);
+            if (syncDriftWindow.length === WATCHDOG_WINDOW_SIZE && badReadingCount >= WATCHDOG_VIOLATION_LIMIT) {
+                console.warn(`[SYNC-WATCHDOG] ${badReadingCount}/${WATCHDOG_WINDOW_SIZE} readings exceeded ${WATCHDOG_MAX_DRIFT_MS}ms. Forcing Engine restart...`);
                 syncDriftWindow.length = 0;
                 badReadingCount = 0;
                 teardownSendspinEngine();
