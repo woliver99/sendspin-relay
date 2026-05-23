@@ -1,3 +1,5 @@
+const MAX_LOG_LINES = 500;
+
 window._rawLogs = [];
 try {
     const saved = localStorage.getItem('sendspinDebugLogs');
@@ -26,8 +28,8 @@ window._rawLogs.push(`\n=== NEW SESSION [${timeStr}] ===\n`);
         window._rawLogs.push(`[${time}] [${method.toUpperCase()}] ${parsed.join(' ')}`);
 
         // Cap arrays so JSON.stringify remains performant and local storage isn't exhausted
-        if (window._rawLogs.length > 2000) {
-            window._rawLogs = window._rawLogs.slice(window._rawLogs.length - 2000);
+        if (window._rawLogs.length > MAX_LOG_LINES) {
+            window._rawLogs = window._rawLogs.slice(window._rawLogs.length - MAX_LOG_LINES);
         }
 
         try {
