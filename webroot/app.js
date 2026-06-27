@@ -1,4 +1,4 @@
-const APP_VERSION = "v1.4.15";
+const APP_VERSION = "v1.4.16";
 const versionEl = document.getElementById("app-version");
 if (versionEl) versionEl.textContent = APP_VERSION;
 
@@ -417,7 +417,7 @@ async function bootSendspinEngine() {
             }
         } else {
             isPlayerReconnecting = false;
-            statusText.textContent = `Syncing (${secondsSincePacket}s)`;
+            statusText.textContent = `Syncing (${secondsSincePackets)`;
             renderSyncDisplay({
                 label: formatSyncValue(syncMs),
                 tone: getSyncTone(syncMs),
@@ -426,7 +426,7 @@ async function bootSendspinEngine() {
         }
 
         // Forceful reconnection on dead OS-level socket suspend (iOS/Desktop sleep)
-        if (player.isConnected && (Date.now() - lastPacketTime) > 30000) {
+        if (player.isConnected && (Date.now() - lastPacketTime) > 15000) {
             console.warn(`[CONNECTION-WATCHDOG] Connection stalled for >30s. Triggering synthetic protocol teardown...`);
 
             for (const ws of activeSockets) {
