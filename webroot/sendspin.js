@@ -371,7 +371,7 @@ var require_libopus_decoder = __commonJS({
         },
         Instance: function(module2, info) {
           this.exports = // EMSCRIPTEN_START_ASM
-          function instantiate(asmLibraryArg2) {
+          (function instantiate(asmLibraryArg2) {
             function Table(ret) {
               ret.set = function(i2, func) {
                 this[i2] = func;
@@ -19808,7 +19808,7 @@ var require_libopus_decoder = __commonJS({
               };
             }
             return asmFunc(asmLibraryArg2);
-          }(asmLibraryArg);
+          })(asmLibraryArg);
         },
         instantiate: (
           /** @suppress{checkTypes} */
@@ -21627,6 +21627,13 @@ function clampSyncDelayMs(delayMs) {
 
 // dist/core/protocol-handler.js
 var STATE_UPDATE_INTERVAL = 5e3;
+var DEFAULT_REQUIRED_LEAD_TIME_MS = 250;
+var DEFAULT_MIN_BUFFER_MS = 250;
+function assertBufferMs(value, name) {
+  if (!isFinite(value) || value < 0) {
+    throw new RangeError(`${name} must be a non-negative finite number`);
+  }
+}
 var ProtocolHandler = class {
   constructor(playerId, wsManager, streamHandler, stateManager, timeFilter, config = {}) {
     this.playerId = playerId;
@@ -21637,6 +21644,10 @@ var ProtocolHandler = class {
     this.clientName = config.clientName ?? "Sendspin Player";
     this.codecs = config.codecs ?? ["opus", "flac", "pcm"];
     this.bufferCapacity = config.bufferCapacity ?? 1024 * 1024 * 5;
+    this.requiredLeadTimeMs = config.requiredLeadTimeMs ?? DEFAULT_REQUIRED_LEAD_TIME_MS;
+    assertBufferMs(this.requiredLeadTimeMs, "requiredLeadTimeMs");
+    this.minBufferMs = config.minBufferMs ?? DEFAULT_MIN_BUFFER_MS;
+    assertBufferMs(this.minBufferMs, "minBufferMs");
     this.useHardwareVolume = config.useHardwareVolume ?? false;
     this.onVolumeCommand = config.onVolumeCommand;
     this.onDelayCommand = config.onDelayCommand;
@@ -21794,6 +21805,16 @@ var ProtocolHandler = class {
     };
     this.wsManager.send(hello);
   }
+  setRequiredLeadTimeMs(leadTimeMs) {
+    assertBufferMs(leadTimeMs, "requiredLeadTimeMs");
+    this.requiredLeadTimeMs = leadTimeMs;
+    this.sendStateUpdate();
+  }
+  setMinBufferMs(minBufferMs) {
+    assertBufferMs(minBufferMs, "minBufferMs");
+    this.minBufferMs = minBufferMs;
+    this.sendStateUpdate();
+  }
   // Send state update
   // When skipHardwareRead is true, use stateManager values instead of reading from hardware.
   // This avoids race conditions when responding to volume commands.
@@ -21815,6 +21836,8 @@ var ProtocolHandler = class {
           volume,
           muted,
           static_delay_ms: staticDelayMs,
+          required_lead_time_ms: this.requiredLeadTimeMs,
+          min_buffer_ms: this.minBufferMs,
           supported_commands: ["set_static_delay"]
         }
       }
@@ -22272,7 +22295,7 @@ var SendspinTimeFilter = class {
    * @param time_added - Client timestamp when this measurement was taken in microseconds
    */
   update(measurement, max_error, time_added) {
-    if (time_added === this._last_update) {
+    if (time_added <= this._last_update) {
       return;
     }
     const dt = time_added - this._last_update;
@@ -22374,6 +22397,7 @@ var SendspinTimeFilter = class {
    */
   reset() {
     this._count = 0;
+    this._last_update = 0;
     this._offset = 0;
     this._drift = 0;
     this._offset_covariance = Infinity;
@@ -22424,6 +22448,37 @@ var SendspinTimeFilter = class {
   }
 };
 
+// dist/core/static-delay-store.js
+var STATIC_DELAY_STORAGE_KEY = "sendspin-static-delay-ms";
+var StaticDelayStore = class {
+  constructor(storage) {
+    this.storage = storage;
+  }
+  load() {
+    if (!this.storage)
+      return null;
+    try {
+      const stored = this.storage.getItem(STATIC_DELAY_STORAGE_KEY);
+      if (stored === null)
+        return null;
+      const value = parseFloat(stored);
+      if (isNaN(value))
+        return null;
+      return clampSyncDelayMs(value);
+    } catch {
+      return null;
+    }
+  }
+  save(delayMs) {
+    if (!this.storage)
+      return;
+    try {
+      this.storage.setItem(STATIC_DELAY_STORAGE_KEY, delayMs.toString());
+    } catch {
+    }
+  }
+};
+
 // dist/core/core.js
 function generateRandomId() {
   return Math.random().toString(36).substring(2, 6);
@@ -22434,7 +22489,10 @@ var SendspinCore = class {
     const playerId = config.playerId ?? `sendspin-js-${randomId}`;
     const clientName = config.clientName ?? `Sendspin JS Client (${randomId})`;
     this.config = { ...config, playerId, clientName };
-    this._syncDelayMs = clampSyncDelayMs(config.syncDelay ?? 0);
+    this.delayStore = new StaticDelayStore(config.storage ?? null);
+    const persisted = this.delayStore.load();
+    const initialDelay = config.syncDelay ?? persisted ?? config.defaultSyncDelay ?? 0;
+    this._syncDelayMs = clampSyncDelayMs(initialDelay);
     this.timeFilter = new SendspinTimeFilter(0, 1.1, 2, 1e-12);
     this.stateManager = new StateManager(config.onStateChange);
     this.decoder = new SendspinDecoder((chunk) => this._onAudioData?.(chunk), () => this.stateManager.streamGeneration);
@@ -22450,6 +22508,8 @@ var SendspinCore = class {
         clientName,
         codecs: config.codecs,
         bufferCapacity: config.bufferCapacity,
+        requiredLeadTimeMs: config.requiredLeadTimeMs,
+        minBufferMs: config.minBufferMs,
         useHardwareVolume: config.useHardwareVolume,
         onVolumeCommand: config.onVolumeCommand,
         onDelayCommand: config.onDelayCommand,
@@ -22487,9 +22547,13 @@ var SendspinCore = class {
   handleVolumeUpdate() {
     this._onVolumeUpdate?.();
   }
-  handleSyncDelayChange(delayMs) {
+  applyDelay(delayMs) {
     this._syncDelayMs = clampSyncDelayMs(delayMs);
+    this.delayStore.save(this._syncDelayMs);
     this._onSyncDelayChange?.(this._syncDelayMs);
+  }
+  handleSyncDelayChange(delayMs) {
+    this.applyDelay(delayMs);
   }
   getSyncDelayMs() {
     return this._syncDelayMs;
@@ -22564,7 +22628,7 @@ var SendspinCore = class {
     this.stateManager.isPlaying = false;
     this.stateManager.currentStreamFormat = null;
   }
-  disconnect(reason = "shutdown") {
+  disconnect(reason = "restart") {
     if (this.wsManager.isConnected()) {
       this.protocolHandler.sendGoodbye(reason);
     }
@@ -22592,9 +22656,17 @@ var SendspinCore = class {
   // Sync delay
   // ========================================
   setSyncDelay(delayMs) {
-    this._syncDelayMs = clampSyncDelayMs(delayMs);
-    this._onSyncDelayChange?.(this._syncDelayMs);
+    this.applyDelay(delayMs);
     this.protocolHandler.sendStateUpdate();
+  }
+  // ========================================
+  // Buffer timing
+  // ========================================
+  setRequiredLeadTimeMs(leadTimeMs) {
+    this.protocolHandler.setRequiredLeadTimeMs(leadTimeMs);
+  }
+  setMinBufferMs(minBufferMs) {
+    this.protocolHandler.setMinBufferMs(minBufferMs);
   }
   // ========================================
   // Controller commands
@@ -22645,9 +22717,11 @@ var SendspinCore = class {
     const serverTimeUs = this.getCurrentServerTimeUs();
     const elapsedUs = serverTimeUs - metadata.timestamp;
     const positionMs = metadata.progress.track_progress + elapsedUs * metadata.progress.playback_speed / 1e6;
+    const trackDuration = metadata.progress.track_duration;
     return {
-      positionMs: Math.max(0, Math.min(positionMs, metadata.progress.track_duration)),
-      durationMs: metadata.progress.track_duration,
+      // track_duration 0 means unbounded (live radio), so floor at 0 only.
+      positionMs: trackDuration === 0 ? Math.max(0, positionMs) : Math.max(0, Math.min(positionMs, trackDuration)),
+      durationMs: trackDuration,
       playbackSpeed: metadata.progress.playback_speed / 1e3
     };
   }
@@ -22917,6 +22991,7 @@ var RecorrectionMonitor = class {
     this.prevRawSyncErrorMs = null;
     this.pendingJumpSign = null;
     this.pendingJumpAtMs = null;
+    this.transientStartedAtMs = null;
     this._hardResyncGraceUntilMs = null;
     this._lastHardResyncAtMs = -Infinity;
     this._minScheduleTimeSec = null;
@@ -22938,6 +23013,7 @@ var RecorrectionMonitor = class {
     this.breachStartedAtMs = null;
     this.pendingJumpSign = null;
     this.pendingJumpAtMs = null;
+    this.transientStartedAtMs = null;
   }
   resetCheckState() {
     this.clearBreachState();
@@ -22980,8 +23056,8 @@ var RecorrectionMonitor = class {
       return false;
     }
     const jumpDeltaMs = rawSyncErrorMs - prev;
-    const jumpSign = Math.sign(rawSyncErrorMs);
-    const isJumpDetected = Math.abs(jumpDeltaMs) >= RECORRECTION_TRANSIENT_JUMP_MS && jumpSign !== 0;
+    const jumpSign = Math.sign(jumpDeltaMs);
+    const isJumpDetected = Math.abs(jumpDeltaMs) >= RECORRECTION_TRANSIENT_JUMP_MS;
     if (!isJumpDetected) {
       this.pendingJumpSign = null;
       this.pendingJumpAtMs = null;
@@ -22991,8 +23067,6 @@ var RecorrectionMonitor = class {
     this.pendingJumpSign = jumpSign;
     this.pendingJumpAtMs = nowMs;
     if (isConfirmed) {
-      this.pendingJumpSign = null;
-      this.pendingJumpAtMs = null;
       return false;
     }
     return true;
@@ -23008,8 +23082,18 @@ var RecorrectionMonitor = class {
       return false;
     }
     if (isTransient) {
-      this.clearBreachState();
-      return false;
+      if (this.transientStartedAtMs === null) {
+        this.transientStartedAtMs = nowMs;
+      }
+      if (nowMs - this.transientStartedAtMs < RECORRECTION_SUSTAIN_MS) {
+        this.breachStartedAtMs = null;
+        return false;
+      }
+      if (this.breachStartedAtMs === null) {
+        this.breachStartedAtMs = this.transientStartedAtMs;
+      }
+    } else {
+      this.transientStartedAtMs = null;
     }
     if (this.breachStartedAtMs === null) {
       this.breachStartedAtMs = nowMs;
@@ -23106,7 +23190,9 @@ var SAMPLE_CORRECTION_FADE_ALPHAS = new Float32Array(SAMPLE_CORRECTION_FADE_LEN)
 for (let f = 0; f < SAMPLE_CORRECTION_FADE_LEN; f++) {
   SAMPLE_CORRECTION_FADE_ALPHAS[f] = (SAMPLE_CORRECTION_FADE_LEN - f) / (SAMPLE_CORRECTION_FADE_LEN + 1) * SAMPLE_CORRECTION_FADE_STRENGTH;
 }
-var SYNC_ERROR_ALPHA = 0.1;
+var RATE_CORRECTION_SOFT = 3e-3;
+var RATE_CORRECTION_FIRM = 5e-3;
+var SYNC_ERROR_ALPHA = 0.05;
 var SCHEDULE_HEADROOM_SEC = 0.2;
 var SCHEDULE_HORIZON_PRECISE_SEC = 20;
 var SCHEDULE_HORIZON_GOOD_SEC = 8;
@@ -23117,6 +23203,10 @@ var SCHEDULE_HORIZON_GOOD_ERROR_MS = 8;
 var SCHEDULE_REFILL_THRESHOLD_FRACTION = 0.5;
 var SCHEDULE_REFILL_MIN_THRESHOLD_SEC = 0.1;
 var SCHEDULE_REFILL_MAX_THRESHOLD_SEC = 5;
+var VOLUME_RAMP_TIME_CONSTANT_SEC = 0.015;
+function perceptualGain(volume) {
+  return Math.pow(volume / 100, 1.5);
+}
 var DEFAULT_CORRECTION_THRESHOLDS = {
   sync: {
     resyncAboveMs: 200,
@@ -23544,7 +23634,12 @@ var AudioScheduler = class {
       this.gainNode.gain.value = 1;
       return;
     }
-    this.gainNode.gain.value = this.stateManager.muted ? 0 : this.stateManager.volume / 100;
+    const target = this.stateManager.muted ? 0 : perceptualGain(this.stateManager.volume);
+    if (this.audioContext) {
+      this.gainNode.gain.setTargetAtTime(target, this.audioContext.currentTime, VOLUME_RAMP_TIME_CONSTANT_SEC);
+    } else {
+      this.gainNode.gain.value = target;
+    }
   }
   measureBufferedPlaybackRunwaySec() {
     if (!this.audioContext)
@@ -23680,6 +23775,9 @@ var AudioScheduler = class {
         scheduleTime = playbackTime - syncDelaySec;
         const minScheduleTimeSec = this.recorrectionMonitor.minScheduleTimeSec;
         if (minScheduleTimeSec !== null) {
+          if (scheduleTime + chunk.buffer.duration <= minScheduleTimeSec) {
+            continue;
+          }
           scheduleTime = Math.max(scheduleTime, minScheduleTimeSec);
           playbackTime = scheduleTime + syncDelaySec;
         }
@@ -23710,7 +23808,7 @@ var AudioScheduler = class {
           } else if (Math.abs(correctionErrorMs) > thresholds.resyncAboveMs) {
             playbackTime = this.nextPlaybackTime;
             scheduleTime = this.nextScheduleTime;
-            playbackRate = Number.isFinite(thresholds.rate2AboveMs) ? correctionErrorMs > 0 ? 1.02 : 0.98 : 1;
+            playbackRate = Number.isFinite(thresholds.rate2AboveMs) ? correctionErrorMs > 0 ? 1 + RATE_CORRECTION_FIRM : 1 - RATE_CORRECTION_FIRM : 1;
             this.currentCorrectionMethod = playbackRate === 1 ? "none" : "rate";
             this.lastSamplesAdjusted = 0;
             chunk.buffer = this.copyBuffer(chunk.buffer);
@@ -23734,9 +23832,9 @@ var AudioScheduler = class {
             scheduleTime = this.nextScheduleTime;
             const absErrorMs = Math.abs(correctionErrorMs);
             if (correctionErrorMs > 0) {
-              playbackRate = absErrorMs >= thresholds.rate2AboveMs ? 1.02 : absErrorMs >= thresholds.rate1AboveMs ? 1.01 : 1;
+              playbackRate = absErrorMs >= thresholds.rate2AboveMs ? 1 + RATE_CORRECTION_FIRM : absErrorMs >= thresholds.rate1AboveMs ? 1 + RATE_CORRECTION_SOFT : 1;
             } else {
-              playbackRate = absErrorMs >= thresholds.rate2AboveMs ? 0.98 : absErrorMs >= thresholds.rate1AboveMs ? 0.99 : 1;
+              playbackRate = absErrorMs >= thresholds.rate2AboveMs ? 1 - RATE_CORRECTION_FIRM : absErrorMs >= thresholds.rate1AboveMs ? 1 - RATE_CORRECTION_SOFT : 1;
             }
             this.currentCorrectionMethod = playbackRate === 1 ? "none" : "rate";
             this.lastSamplesAdjusted = 0;
@@ -23944,7 +24042,12 @@ var SendspinPlayer = class {
     if (this.ownsAudioElement && typeof document === "undefined") {
       throw new Error("SendspinPlayer requires a DOM document to use media-element output without a provided audioElement.");
     }
-    const syncDelay = config.syncDelay ?? getDefaultSyncDelay();
+    let storage = null;
+    if (config.storage !== void 0) {
+      storage = config.storage;
+    } else if (typeof localStorage !== "undefined") {
+      storage = localStorage;
+    }
     this.core = new SendspinCore({
       playerId: config.playerId,
       baseUrl: config.baseUrl,
@@ -23952,7 +24055,11 @@ var SendspinPlayer = class {
       webSocket: config.webSocket,
       codecs: config.codecs,
       bufferCapacity: config.bufferCapacity ?? (outputMode === "media-element" ? 1024 * 1024 * 5 : 1024 * 1024 * 1.5),
-      syncDelay,
+      syncDelay: config.syncDelay,
+      defaultSyncDelay: getDefaultSyncDelay(),
+      storage,
+      requiredLeadTimeMs: config.requiredLeadTimeMs,
+      minBufferMs: config.minBufferMs,
       useHardwareVolume: config.useHardwareVolume,
       onVolumeCommand: config.onVolumeCommand,
       onDelayCommand: config.onDelayCommand,
@@ -23960,12 +24067,7 @@ var SendspinPlayer = class {
       reconnect: config.reconnect,
       onStateChange: config.onStateChange
     });
-    let storage = null;
-    if (config.storage !== void 0) {
-      storage = config.storage;
-    } else if (typeof localStorage !== "undefined") {
-      storage = localStorage;
-    }
+    const syncDelay = this.core.getSyncDelayMs();
     this.scheduler = new AudioScheduler({
       stateManager: this.core._stateManager,
       timeFilter: this.core._timeFilter,
@@ -24052,9 +24154,9 @@ var SendspinPlayer = class {
   }
   /**
    * Disconnect from Sendspin server
-   * @param reason - Optional reason for disconnecting (default: 'shutdown')
+   * @param reason - Optional reason for disconnecting (default: 'restart')
    */
-  disconnect(reason = "shutdown") {
+  disconnect(reason = "restart") {
     this.cancelPendingDisconnectPlaybackReset();
     this.suppressDisconnectPlaybackReset = true;
     this.core.disconnect(reason);
@@ -24075,6 +24177,23 @@ var SendspinPlayer = class {
   // Set static delay (in milliseconds, 0-5000)
   setSyncDelay(delayMs) {
     this.core.setSyncDelay(delayMs);
+  }
+  /**
+   * Update the reported startup lead time at runtime (ms). Reported to the
+   * server via client/state. Debounce calls to avoid reacting to transient
+   * fluctuations. Throws RangeError if not a non-negative finite number.
+   */
+  setRequiredLeadTimeMs(leadTimeMs) {
+    this.core.setRequiredLeadTimeMs(leadTimeMs);
+  }
+  /**
+   * Update the reported minimum ongoing buffer duration at runtime (ms).
+   * Reported to the server via client/state. Debounce calls to avoid reacting
+   * to transient fluctuations. Throws RangeError if not a non-negative finite
+   * number.
+   */
+  setMinBufferMs(minBufferMs) {
+    this.core.setMinBufferMs(minBufferMs);
   }
   /**
    * Set the sync correction mode at runtime.

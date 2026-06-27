@@ -1,4 +1,4 @@
-const APP_VERSION = "v1.4.14";
+const APP_VERSION = "v1.4.15";
 const versionEl = document.getElementById("app-version");
 if (versionEl) versionEl.textContent = APP_VERSION;
 
@@ -326,7 +326,6 @@ async function bootSendspinEngine() {
         clientName: `Guest Speaker (${guestId})`,
         baseUrl: relayUrl,
         correctionMode: "sync",
-        correctionThresholds: { sync: { resyncAboveMs: 20 } },
         outputMode: "direct",
         reconnect: {
             baseDelayMs: 1000,
