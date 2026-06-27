@@ -1,4 +1,4 @@
-const APP_VERSION = "v1.4.17";
+const APP_VERSION = "v1.4.18";
 const versionEl = document.getElementById("app-version");
 if (versionEl) versionEl.textContent = APP_VERSION;
 
@@ -507,7 +507,7 @@ async function bootSendspinEngine() {
       }
     } else {
       isPlayerReconnecting = false;
-      statusText.textContent = `Syncing (${secondsSincePacke}s)`;
+      statusText.textContent = `Syncing (${secondsSincePacket}s)`;
       renderSyncDisplay({
         label: formatSyncValue(syncMs),
         tone: getSyncTone(syncMs),
